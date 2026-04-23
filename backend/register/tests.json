@@ -7,21 +7,47 @@
       "expectedStatus": 200
     },
     {
-      "name": "Повторная регистрация — ошибка",
+      "name": "GET content",
+      "method": "GET",
+      "path": "/?action=content",
+      "expectedStatus": 200,
+      "expectedBody": {"content": {}},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Регистрация — дубль",
       "method": "POST",
       "path": "/",
-      "body": {"email": "test_clodev@example.com", "password": "securepass123", "plan": "free"},
+      "body": {"action": "register", "email": "test_clodev@example.com", "password": "securepass123", "plan": "free"},
       "expectedStatus": 409,
       "expectedBody": {"error": "Пользователь с таким email уже существует"},
       "bodyMatcher": "partial"
     },
     {
-      "name": "Пустой email — ошибка",
+      "name": "Вход — неверный пароль",
       "method": "POST",
       "path": "/",
-      "body": {"email": "", "password": "securepass123"},
-      "expectedStatus": 400,
-      "expectedBody": {"error": "Email и пароль обязательны"},
+      "body": {"action": "login", "email": "test_clodev@example.com", "password": "wrongpass"},
+      "expectedStatus": 401,
+      "expectedBody": {"error": "Неверный email или пароль"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Вход — верные данные",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "login", "email": "test_clodev@example.com", "password": "securepass123"},
+      "expectedStatus": 200,
+      "expectedBody": {"success": true},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Биллинг — нет доступа",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "billing", "password": "wrongpass"},
+      "expectedStatus": 401,
+      "expectedBody": {"error": "Нет доступа"},
       "bodyMatcher": "partial"
     }
   ]
