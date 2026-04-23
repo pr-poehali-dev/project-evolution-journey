@@ -1,0 +1,4 @@
+ALTER TABLE t_p30709305_project_evolution_jo.projects
+  ADD COLUMN IF NOT EXISTS github_secret VARCHAR(64),
+  ADD COLUMN IF NOT EXISTS auto_deploy BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS auto_deploy_branch VARCHAR(100) DEFAULT 'main';

@@ -4,6 +4,7 @@ import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { getUser } from "@/lib/auth";
 import { apiGet, apiPost } from "@/lib/api";
 import Icon from "@/components/ui/icon";
+import func2url from "../../backend/func2url.json";
 
 const STATUS_COLORS: Record<string, string> = {
   ready: "text-green-400 bg-green-400/10",
@@ -64,6 +65,11 @@ export default function Project() {
   const [tgToken, setTgToken] = useState(""); const [tgChat, setTgChat] = useState("");
   const [slackUrl, setSlackUrl] = useState("");
   const [rollbacking, setRollbacking] = useState<number | null>(null);
+
+  const [ghConfig, setGhConfig] = useState<{ secret: string; auto_deploy: boolean; branch: string } | null>(null);
+  const [ghBranch, setGhBranch] = useState("main");
+  const [ghSaving, setGhSaving] = useState(false);
+  const [ghCopied, setGhCopied] = useState(false);
 
   const load = async () => {
     if (!user || !id) return;
@@ -138,12 +144,37 @@ export default function Project() {
     loadIntegrations();
   };
 
+  const loadGithubConfig = async () => {
+    if (!user || !id) return;
+    const data = await apiGet("github_config", { project_id: id, user_id: String(user.user_id) });
+    if (data.branch !== undefined) {
+      setGhConfig({ secret: data.secret, auto_deploy: data.auto_deploy, branch: data.branch });
+      setGhBranch(data.branch || "main");
+    }
+  };
+
+  const handleSetupGithub = async (enable: boolean) => {
+    if (!user || !id) return;
+    setGhSaving(true);
+    const data = await apiPost("setup_github", { project_id: Number(id), user_id: user.user_id, auto_deploy: enable, branch: ghBranch });
+    if (data.data?.secret !== undefined) {
+      setGhConfig({ secret: data.data.secret, auto_deploy: enable, branch: ghBranch });
+    }
+    setGhSaving(false);
+  };
+
+  const webhookUrl = `${func2url.register}?project_id=${id}`;
+  const copyWebhookUrl = () => {
+    navigator.clipboard.writeText(webhookUrl).then(() => { setGhCopied(true); setTimeout(() => setGhCopied(false), 2000); });
+  };
+
   useEffect(() => { load(); }, [id]);
   useEffect(() => { if (tab === "analytics" && analytics.length === 0) loadAnalytics(); }, [tab]);
   useEffect(() => { if (tab === "webhooks") loadWebhooks(); }, [tab]);
   useEffect(() => { if (tab === "usage") loadUsage(); }, [tab]);
   useEffect(() => { if (tab === "env") loadEnvEnvs(); }, [tab]);
   useEffect(() => { if (tab === "integrations") loadIntegrations(); }, [tab]);
+  useEffect(() => { if (tab === "settings") loadGithubConfig(); }, [tab]);
 
   const handleDeploy = async () => {
     if (!user || !id) return;
@@ -570,6 +601,68 @@ export default function Project() {
               <div><span className="text-neutral-500">Репозиторий</span><p className="text-white mt-1 truncate">{project.repo_url || "—"}</p></div>
             </div>
           </div>
+          {/* GitHub Autodeploy */}
+          <div className="border border-neutral-800 p-6 mb-4">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <Icon name="Github" size={20} className="text-neutral-300" />
+                <div>
+                  <h3 className="font-semibold">GitHub Autodeploy</h3>
+                  <p className="text-neutral-500 text-xs">Автоматический деплой при push в репозиторий</p>
+                </div>
+              </div>
+              {ghConfig?.auto_deploy && <span className="text-xs bg-green-400/10 text-green-400 px-2 py-0.5">Активен</span>}
+            </div>
+
+            <div className="flex gap-2 mb-4">
+              <input value={ghBranch} onChange={(e) => setGhBranch(e.target.value)} placeholder="main"
+                className="w-36 bg-neutral-900 border border-neutral-700 px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors" />
+              <span className="text-neutral-500 text-sm self-center">— ветка для автодеплоя</span>
+            </div>
+
+            <div className="flex gap-2 mb-5">
+              <button onClick={() => handleSetupGithub(true)} disabled={ghSaving}
+                className="px-4 py-2 bg-blue-400 text-black text-sm font-medium hover:bg-white transition-colors disabled:opacity-40">
+                {ghSaving ? "..." : ghConfig?.auto_deploy ? "Обновить" : "Включить"}
+              </button>
+              {ghConfig?.auto_deploy && (
+                <button onClick={() => handleSetupGithub(false)} disabled={ghSaving}
+                  className="px-4 py-2 border border-neutral-700 text-neutral-400 text-sm hover:border-red-500 hover:text-red-400 transition-colors disabled:opacity-40">
+                  Отключить
+                </button>
+              )}
+            </div>
+
+            {ghConfig?.secret && (
+              <div className="bg-neutral-950 border border-neutral-800 p-4 rounded">
+                <p className="text-xs text-neutral-500 uppercase tracking-wide mb-3">Настройка в GitHub → Settings → Webhooks → Add webhook</p>
+                <div className="flex flex-col gap-2 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-neutral-500 shrink-0">Payload URL</span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <code className="text-blue-400 text-xs truncate">{webhookUrl}</code>
+                      <button onClick={copyWebhookUrl} className="text-neutral-500 hover:text-white transition-colors shrink-0">
+                        <Icon name={ghCopied ? "Check" : "Copy"} size={13} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-neutral-500 shrink-0">Content type</span>
+                    <code className="text-white text-xs">application/json</code>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-neutral-500 shrink-0">Secret</span>
+                    <code className="text-green-400 text-xs font-mono">{ghConfig.secret}</code>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-neutral-500 shrink-0">Events</span>
+                    <span className="text-white text-xs">Just the push event</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="border border-red-900/50 p-6">
             <h3 className="font-semibold text-red-400 mb-2">Опасная зона</h3>
             <p className="text-neutral-400 text-sm mb-4">Удаление проекта необратимо.</p>

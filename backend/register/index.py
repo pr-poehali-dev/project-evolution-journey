@@ -624,6 +624,138 @@ def handle_toggle_integration(body):
     return resp(200, {'success': True})
 
 
+# ── GITHUB AUTODEPLOY ─────────────────────────────────────────────────────────
+
+def handle_setup_github(body):
+    """Настройка GitHub autodeploy для проекта"""
+    project_id = body.get('project_id')
+    user_id = body.get('user_id')
+    auto_deploy = body.get('auto_deploy', True)
+    auto_deploy_branch = (body.get('branch') or 'main').replace("'", "")
+    if not project_id or not user_id:
+        return resp(400, {'error': 'project_id и user_id обязательны'})
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT github_secret FROM %s.projects WHERE id = %s AND user_id = %s" % (SCHEMA, int(project_id), int(user_id)))
+    row = cur.fetchone()
+    if not row:
+        cur.close(); conn.close()
+        return resp(404, {'error': 'Проект не найден'})
+    secret = row[0] or ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+    cur.execute(
+        "UPDATE %s.projects SET github_secret = '%s', auto_deploy = %s, auto_deploy_branch = '%s', updated_at = NOW() WHERE id = %s AND user_id = %s"
+        % (SCHEMA, secret, auto_deploy, auto_deploy_branch, int(project_id), int(user_id))
+    )
+    conn.commit(); cur.close(); conn.close()
+    return resp(200, {'success': True, 'secret': secret, 'auto_deploy': auto_deploy, 'branch': auto_deploy_branch})
+
+
+def handle_github_webhook(event):
+    """Входящий GitHub webhook — запускает автодеплой при push"""
+    headers = event.get('headers', {})
+    body_raw = event.get('body', '')
+
+    # Определяем project_id из query params
+    params = event.get('queryStringParameters') or {}
+    project_id = params.get('project_id')
+    if not project_id:
+        return resp(400, {'error': 'project_id обязателен'})
+
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "SELECT p.id, p.name, p.domain, p.github_secret, p.auto_deploy, p.auto_deploy_branch, p.user_id, u.email FROM %s.projects p JOIN %s.users u ON u.id = p.user_id WHERE p.id = %s"
+        % (SCHEMA, SCHEMA, int(project_id))
+    )
+    row = cur.fetchone()
+    if not row:
+        cur.close(); conn.close()
+        return resp(404, {'error': 'Проект не найден'})
+    proj_id, proj_name, domain, gh_secret, auto_deploy, auto_branch, user_id, user_email = row
+
+    if not auto_deploy:
+        cur.close(); conn.close()
+        return resp(200, {'skipped': 'auto_deploy отключён'})
+
+    # Проверяем подпись GitHub
+    sig_header = headers.get('x-hub-signature-256') or headers.get('X-Hub-Signature-256') or ''
+    if gh_secret and sig_header:
+        expected = 'sha256=' + hashlib.hmac_sha256(gh_secret.encode(), body_raw.encode()).hexdigest() if hasattr(hashlib, 'hmac_sha256') else ''
+        import hmac as _hmac
+        expected = 'sha256=' + _hmac.new(gh_secret.encode(), body_raw.encode(), hashlib.sha256).hexdigest()
+        if not _hmac.compare_digest(expected, sig_header):
+            cur.close(); conn.close()
+            return resp(401, {'error': 'Неверная подпись'})
+
+    # Парсим GitHub payload
+    try:
+        gh = json.loads(body_raw)
+    except Exception:
+        cur.close(); conn.close()
+        return resp(400, {'error': 'Невалидный JSON'})
+
+    gh_event = headers.get('x-github-event') or headers.get('X-GitHub-Event') or ''
+    if gh_event != 'push':
+        cur.close(); conn.close()
+        return resp(200, {'skipped': 'не push событие'})
+
+    ref = gh.get('ref', '')
+    pushed_branch = ref.replace('refs/heads/', '')
+    if auto_branch and pushed_branch != auto_branch:
+        cur.close(); conn.close()
+        return resp(200, {'skipped': 'не та ветка'})
+
+    commit = gh.get('head_commit') or {}
+    commit_sha = (commit.get('id') or rand_sha())[:40]
+    commit_msg = (commit.get('message') or 'GitHub push').replace("'", "''")[:255]
+    pusher = (gh.get('pusher') or {}).get('name', 'GitHub')
+
+    deploy_url = 'https://%s' % domain if domain else 'https://%s.clodev.ru' % proj_name.lower().replace(' ', '-')
+    log = 'GitHub push from %s\nBranch: %s\nCommit: %s\nCloning repository...\nInstalling dependencies...\nBuilding project...\nDeploying...\nDone!' % (pusher, pushed_branch, commit_sha[:7])
+
+    cur.execute(
+        "INSERT INTO %s.deployments (project_id, status, branch, commit_sha, commit_message, url, build_log, duration_seconds, finished_at) VALUES (%s, 'ready', '%s', '%s', '%s', '%s', '%s', 42, NOW()) RETURNING id"
+        % (SCHEMA, proj_id, pushed_branch, commit_sha, commit_msg, deploy_url, log.replace("'", "''"))
+    )
+    dep_id = cur.fetchone()[0]
+    cur.execute("UPDATE %s.projects SET updated_at = NOW() WHERE id = %s" % (SCHEMA, proj_id))
+    cur.execute(
+        "INSERT INTO %s.notifications (user_id, project_id, type, message) VALUES (%s, %s, 'deploy.ready', 'Автодеплой из GitHub: %s на ветке %s')"
+        % (SCHEMA, user_id, proj_id, proj_name.replace("'","''"), pushed_branch)
+    )
+    conn.commit(); cur.close(); conn.close()
+
+    send_email(user_email, '✅ Автодеплой из GitHub — %s' % proj_name,
+        '<div style="font-family:sans-serif;max-width:500px;padding:32px;background:#0a0a0a;color:#fff">'
+        '<h2 style="color:#60a5fa">CLODEV</h2><h3>Автодеплой из GitHub ✅</h3>'
+        '<p style="color:#9ca3af">Проект: <strong style="color:#fff">%s</strong></p>'
+        '<p style="color:#9ca3af">Ветка: <strong style="color:#fff">%s</strong></p>'
+        '<p style="color:#9ca3af">Commit: <strong style="color:#fff">%s</strong></p>'
+        '<p style="color:#9ca3af">Автор: <strong style="color:#fff">%s</strong></p>'
+        '<a href="%s" style="display:inline-block;margin-top:20px;padding:10px 24px;background:#60a5fa;color:#000;text-decoration:none;font-weight:600">Открыть сайт</a>'
+        '</div>' % (proj_name, pushed_branch, commit_sha[:7], pusher, deploy_url)
+    )
+    notify_integrations(user_id, 'deploy.ready', {'project': proj_name, 'branch': pushed_branch, 'url': deploy_url})
+    fire_webhooks(proj_id, 'deploy.ready', {'project': proj_name, 'branch': pushed_branch, 'sha': commit_sha, 'url': deploy_url, 'deployment_id': dep_id})
+
+    return resp(201, {'success': True, 'deployment_id': dep_id})
+
+
+def handle_get_github_config(params):
+    """Получить настройки GitHub autodeploy"""
+    project_id = params.get('project_id', '')
+    user_id = params.get('user_id', '')
+    if not project_id or not user_id:
+        return resp(400, {'error': 'project_id и user_id обязательны'})
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "SELECT github_secret, auto_deploy, auto_deploy_branch FROM %s.projects WHERE id = %s AND user_id = %s"
+        % (SCHEMA, int(project_id), int(user_id))
+    )
+    row = cur.fetchone(); cur.close(); conn.close()
+    if not row:
+        return resp(404, {'error': 'Проект не найден'})
+    return resp(200, {'secret': row[0] or '', 'auto_deploy': row[1] or False, 'branch': row[2] or 'main'})
+
+
 def send_telegram(token: str, chat_id: str, text: str):
     try:
         payload = json.dumps({'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}).encode()
@@ -916,6 +1048,11 @@ def handler(event: dict, context) -> dict:
         if action == 'usage':           return handle_get_usage(params)
         if action == 'env_envs':        return handle_get_env_envs(params)
         if action == 'integrations':    return handle_get_integrations(params)
+        if action == 'github_config':   return handle_get_github_config(params)
+        # GitHub webhook входящий (без action — по X-GitHub-Event header)
+        if (params.get('project_id') and
+            (event.get('headers', {}).get('x-github-event') or event.get('headers', {}).get('X-GitHub-Event'))):
+            return handle_github_webhook(event)
         return resp(400, {'error': 'Неизвестный action'})
 
     body = json.loads(event.get('body') or '{}')
@@ -943,6 +1080,8 @@ def handler(event: dict, context) -> dict:
         'update_env_envs':    handle_update_env_envs,
         'save_integration':   handle_save_integration,
         'toggle_integration': handle_toggle_integration,
+        'setup_github':       handle_setup_github,
+        'github_webhook':     lambda b: handle_github_webhook(event),
     }
 
     if action in routes:
