@@ -6,6 +6,66 @@ import { apiGet, apiPost } from "@/lib/api";
 import Icon from "@/components/ui/icon";
 import func2url from "../../backend/func2url.json";
 
+function DevToolsHttpTester({ projectUrl }: { projectUrl: string }) {
+  const [url, setUrl] = useState(projectUrl);
+  const [method, setMethod] = useState("GET");
+  const [body, setBody] = useState("");
+  const [result, setResult] = useState<{ status: number; body: string; time: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const run = async () => {
+    if (!url) return;
+    setLoading(true);
+    const t0 = Date.now();
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: method !== "GET" ? { "Content-Type": "application/json" } : undefined,
+        body: method !== "GET" && body ? body : undefined,
+      });
+      const text = await res.text();
+      setResult({ status: res.status, body: text, time: Date.now() - t0 });
+    } catch (e) {
+      setResult({ status: 0, body: String(e), time: Date.now() - t0 });
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="bg-black p-4 flex flex-col gap-3">
+      <div className="flex gap-2">
+        <select value={method} onChange={(e) => setMethod(e.target.value)}
+          className="bg-neutral-900 border border-neutral-700 px-3 py-2 text-xs text-white w-24 focus:outline-none focus:border-blue-400 transition-colors">
+          {["GET","POST","PUT","DELETE"].map((m) => <option key={m}>{m}</option>)}
+        </select>
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://..."
+          className="flex-1 bg-neutral-900 border border-neutral-700 px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-blue-400 transition-colors" />
+        <button onClick={run} disabled={loading || !url}
+          className="px-4 py-2 bg-blue-400 text-black text-xs font-medium hover:bg-white transition-colors disabled:opacity-40">
+          {loading ? "..." : "Send"}
+        </button>
+      </div>
+      {method !== "GET" && (
+        <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={3} placeholder='{"key": "value"}'
+          className="bg-neutral-900 border border-neutral-700 px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-blue-400 transition-colors resize-none" />
+      )}
+      {result && (
+        <div className="border border-neutral-800 rounded overflow-hidden">
+          <div className="flex items-center gap-3 px-3 py-2 bg-neutral-900 border-b border-neutral-800">
+            <span className={`text-xs font-mono font-bold ${result.status >= 200 && result.status < 300 ? "text-green-400" : result.status >= 400 ? "text-red-400" : "text-yellow-400"}`}>
+              {result.status || "ERR"}
+            </span>
+            <span className="text-xs text-neutral-500">{result.time}ms</span>
+          </div>
+          <pre className="text-xs text-green-400 font-mono p-3 max-h-48 overflow-auto whitespace-pre-wrap">
+            {(() => { try { return JSON.stringify(JSON.parse(result.body), null, 2); } catch { return result.body; } })()}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const STATUS_COLORS: Record<string, string> = {
   ready: "text-green-400 bg-green-400/10",
   building: "text-yellow-400 bg-yellow-400/10",
@@ -20,7 +80,7 @@ type AnalyticsRow = { date: string; views: number; unique_visitors: number; band
 type Webhook = { id: number; url: string; events: string; active: boolean; created_at: string };
 type ProjectData = { id: number; name: string; repo_url: string; framework: string; domain: string; env_vars: Record<string, string>; created_at: string; };
 
-type Tab = "deployments" | "analytics" | "usage" | "env" | "domains" | "webhooks" | "integrations" | "settings";
+type Tab = "deployments" | "analytics" | "usage" | "env" | "domains" | "webhooks" | "integrations" | "devtools" | "settings";
 type UsageStat = { date: string; bandwidth_mb: number; requests: number; build_seconds: number };
 type Integration = { id: number; type: string; config: Record<string, string>; active: boolean; created_at: string };
 
@@ -215,6 +275,7 @@ export default function Project() {
     { key: "domains", label: "Домены", icon: "Globe" },
     { key: "webhooks", label: "Webhooks", icon: "Webhook" },
     { key: "integrations", label: "Интеграции", icon: "Plug" },
+    { key: "devtools", label: "Dev Tools", icon: "Terminal" },
     { key: "settings", label: "Настройки", icon: "Settings" },
   ];
 
@@ -513,6 +574,87 @@ export default function Project() {
               <button onClick={handleAddWebhook} disabled={whAdding} className="bg-blue-400 text-black px-5 py-2.5 text-sm font-medium hover:bg-white transition-colors disabled:opacity-50 w-fit">
                 {whAdding ? "Создание..." : "Создать webhook"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DEV TOOLS */}
+      {tab === "devtools" && (
+        <div className="flex flex-col gap-6">
+          {/* Переменные окружения — просмотр */}
+          <div className="border border-neutral-800 rounded-lg overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 bg-neutral-900/60 border-b border-neutral-800">
+              <div className="flex items-center gap-2"><Icon name="Key" size={14} className="text-blue-400" /><span className="text-sm font-medium">Переменные окружения</span></div>
+              <button onClick={() => setTab("env")} className="text-xs text-neutral-400 hover:text-blue-400 transition-colors">Редактировать →</button>
+            </div>
+            <div className="bg-black px-4 py-3">
+              {Object.keys(envVars).length === 0 ? (
+                <p className="text-xs text-neutral-600 py-2">Нет переменных</p>
+              ) : Object.entries(envVars).map(([k, v]) => (
+                <div key={k} className="flex items-center gap-3 py-1.5 border-b border-neutral-900 last:border-0">
+                  <span className="text-xs font-mono text-blue-400 w-48 shrink-0">{k}</span>
+                  <span className="text-xs font-mono text-neutral-500">{"*".repeat(Math.min(v.length, 16))}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Последний деплой — лог */}
+          <div className="border border-neutral-800 rounded-lg overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 bg-neutral-900/60 border-b border-neutral-800">
+              <div className="flex items-center gap-2"><Icon name="ScrollText" size={14} className="text-green-400" /><span className="text-sm font-medium">Лог последнего деплоя</span></div>
+              {deployments[0] && <span className={`text-xs px-2 py-0.5 rounded ${STATUS_COLORS[deployments[0].status] || "text-neutral-400 bg-neutral-800"}`}>{deployments[0].status}</span>}
+            </div>
+            <pre className="bg-black text-xs text-green-400 font-mono p-4 max-h-64 overflow-auto leading-relaxed whitespace-pre-wrap">
+              {deployments[0]?.build_log || "Нет деплоев"}
+            </pre>
+          </div>
+
+          {/* HTTP тестер */}
+          <div className="border border-neutral-800 rounded-lg overflow-hidden">
+            <div className="px-4 py-3 bg-neutral-900/60 border-b border-neutral-800 flex items-center gap-2">
+              <Icon name="Zap" size={14} className="text-yellow-400" />
+              <span className="text-sm font-medium">HTTP тестер</span>
+            </div>
+            <DevToolsHttpTester projectUrl={project?.domain ? `https://${project.domain}` : ""} />
+          </div>
+
+          {/* Быстрые ссылки */}
+          <div className="border border-neutral-800 rounded-lg p-5">
+            <h3 className="text-sm font-medium mb-4 flex items-center gap-2"><Icon name="Link" size={14} className="text-neutral-400" />Быстрые ссылки</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                { label: "UI Kit", icon: "Palette", href: "/dashboard/ui-kit" },
+                { label: "Code Editor", icon: "Code", href: "/dashboard/editor" },
+                { label: "CLI команды", icon: "Terminal", href: "/dashboard/cli" },
+                { label: "AI Ассистент", icon: "Sparkles", href: `/dashboard/project/${id}/ai` },
+              ].map((link) => (
+                <a key={link.label} href={link.href}
+                  className="flex items-center gap-2 px-3 py-2.5 border border-neutral-800 text-sm text-neutral-400 hover:border-blue-400 hover:text-blue-400 transition-colors rounded-lg">
+                  <Icon name={link.icon} size={14} />{link.label}
+                </a>
+              ))}
+            </div>
+          </div>
+
+          {/* Информация о проекте */}
+          <div className="border border-neutral-800 rounded-lg p-5">
+            <h3 className="text-sm font-medium mb-4 flex items-center gap-2"><Icon name="Info" size={14} className="text-neutral-400" />Технические детали</h3>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              {[
+                { label: "Project ID", value: String(project?.id || "—") },
+                { label: "Фреймворк", value: project?.framework || "—" },
+                { label: "Деплоев всего", value: String(deployments.length) },
+                { label: "Последний commit", value: deployments[0]?.commit_sha?.slice(0, 7) || "—" },
+                { label: "Ветка", value: deployments[0]?.branch || "—" },
+                { label: "Домен", value: project?.domain || "—" },
+              ].map((item) => (
+                <div key={item.label} className="flex items-center justify-between border border-neutral-800 px-3 py-2 rounded">
+                  <span className="text-neutral-500 text-xs">{item.label}</span>
+                  <span className="text-white text-xs font-mono">{item.value}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>

@@ -30,6 +30,7 @@ export default function Dashboard() {
   const [newFramework, setNewFramework] = useState("other");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [createStep, setCreateStep] = useState<"template" | "details">("template");
 
   const load = async () => {
     if (!user) return;
@@ -80,45 +81,92 @@ export default function Dashboard() {
       </div>
 
       {showNew && (
-        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center px-6" onClick={() => setShowNew(false)}>
-          <div className="bg-neutral-900 border border-neutral-700 w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-bold mb-5">Новый проект</h2>
-            <form onSubmit={handleCreate} className="flex flex-col gap-4">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs uppercase tracking-wide text-neutral-500">Название</label>
-                <input
-                  required autoFocus value={newName} onChange={(e) => setNewName(e.target.value)}
-                  placeholder="my-awesome-app"
-                  className="bg-neutral-800 border border-neutral-700 px-4 py-2.5 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs uppercase tracking-wide text-neutral-500">Git репозиторий (опционально)</label>
-                <input
-                  value={newRepo} onChange={(e) => setNewRepo(e.target.value)}
-                  placeholder="https://github.com/user/repo"
-                  className="bg-neutral-800 border border-neutral-700 px-4 py-2.5 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs uppercase tracking-wide text-neutral-500">Фреймворк</label>
-                <select
-                  value={newFramework} onChange={(e) => setNewFramework(e.target.value)}
-                  className="bg-neutral-800 border border-neutral-700 px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-400 transition-colors"
-                >
-                  {["nextjs","react","vue","nuxt","svelte","astro","remix","other"].map((f) => (
-                    <option key={f} value={f}>{f.charAt(0).toUpperCase() + f.slice(1)}</option>
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center px-6"
+          onClick={() => { setShowNew(false); setCreateStep("template"); }}>
+          <div className="bg-neutral-900 border border-neutral-700 w-full max-w-2xl p-6" onClick={(e) => e.stopPropagation()}>
+
+            {createStep === "template" ? (
+              <>
+                <div className="flex items-center justify-between mb-5">
+                  <h2 className="text-lg font-bold">Новый проект</h2>
+                  <button onClick={() => { setShowNew(false); setCreateStep("template"); }} className="text-neutral-500 hover:text-white transition-colors">
+                    <Icon name="X" size={16} />
+                  </button>
+                </div>
+                <p className="text-neutral-400 text-sm mb-5">Выбери шаблон или начни с нуля</p>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-5">
+                  {[
+                    { icon: "⚛", label: "React App", framework: "react", desc: "SPA с Vite + TypeScript" },
+                    { icon: "▲", label: "Next.js", framework: "nextjs", desc: "SSR/SSG приложение" },
+                    { icon: "💚", label: "Vue.js", framework: "vue", desc: "Progressive framework" },
+                    { icon: "🔥", label: "Svelte", framework: "svelte", desc: "Компилируемый UI" },
+                    { icon: "🚀", label: "Astro", framework: "astro", desc: "Content-first сайты" },
+                    { icon: "📦", label: "Пустой проект", framework: "other", desc: "Начать с нуля" },
+                  ].map((t) => (
+                    <button key={t.framework}
+                      onClick={() => { setNewFramework(t.framework); setCreateStep("details"); }}
+                      className={`flex flex-col items-start gap-2 p-4 border rounded-lg text-left transition-colors hover:border-blue-400 hover:bg-blue-400/5 ${newFramework === t.framework ? "border-blue-400 bg-blue-400/5" : "border-neutral-800"}`}>
+                      <span className="text-2xl">{t.icon}</span>
+                      <div>
+                        <p className="text-sm font-medium text-white">{t.label}</p>
+                        <p className="text-xs text-neutral-500 mt-0.5">{t.desc}</p>
+                      </div>
+                    </button>
                   ))}
-                </select>
-              </div>
-              {createError && <p className="text-red-400 text-sm">{createError}</p>}
-              <div className="flex gap-3 mt-1">
-                <button type="button" onClick={() => setShowNew(false)} className="flex-1 py-2.5 text-sm border border-neutral-700 text-neutral-300 hover:border-neutral-500 transition-colors">Отмена</button>
-                <button type="submit" disabled={creating} className="flex-1 py-2.5 text-sm bg-blue-400 text-black font-medium hover:bg-white transition-colors disabled:opacity-50">
-                  {creating ? "Создание..." : "Создать"}
+                </div>
+                <button onClick={() => setCreateStep("details")}
+                  className="w-full py-2.5 text-sm border border-neutral-700 text-neutral-300 hover:border-blue-400 hover:text-blue-400 transition-colors">
+                  Продолжить без шаблона →
                 </button>
-              </div>
-            </form>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-3 mb-5">
+                  <button onClick={() => setCreateStep("template")} className="text-neutral-500 hover:text-white transition-colors">
+                    <Icon name="ChevronLeft" size={16} />
+                  </button>
+                  <h2 className="text-lg font-bold">Настройка проекта</h2>
+                  <span className="text-xs bg-neutral-800 text-neutral-400 px-2 py-0.5 rounded">{newFramework}</span>
+                </div>
+                <form onSubmit={handleCreate} className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs uppercase tracking-wide text-neutral-500">Название</label>
+                    <input
+                      required autoFocus value={newName} onChange={(e) => setNewName(e.target.value)}
+                      placeholder="my-awesome-app"
+                      className="bg-neutral-800 border border-neutral-700 px-4 py-2.5 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs uppercase tracking-wide text-neutral-500">Git репозиторий (опционально)</label>
+                    <input
+                      value={newRepo} onChange={(e) => setNewRepo(e.target.value)}
+                      placeholder="https://github.com/user/repo"
+                      className="bg-neutral-800 border border-neutral-700 px-4 py-2.5 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs uppercase tracking-wide text-neutral-500">Фреймворк</label>
+                    <select
+                      value={newFramework} onChange={(e) => setNewFramework(e.target.value)}
+                      className="bg-neutral-800 border border-neutral-700 px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-400 transition-colors"
+                    >
+                      {["nextjs","react","vue","nuxt","svelte","astro","remix","other"].map((f) => (
+                        <option key={f} value={f}>{f.charAt(0).toUpperCase() + f.slice(1)}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {createError && <p className="text-red-400 text-sm">{createError}</p>}
+                  <div className="flex gap-3 mt-1">
+                    <button type="button" onClick={() => { setShowNew(false); setCreateStep("template"); }}
+                      className="flex-1 py-2.5 text-sm border border-neutral-700 text-neutral-300 hover:border-neutral-500 transition-colors">Отмена</button>
+                    <button type="submit" disabled={creating} className="flex-1 py-2.5 text-sm bg-blue-400 text-black font-medium hover:bg-white transition-colors disabled:opacity-50">
+                      {creating ? "Создание..." : "Создать проект"}
+                    </button>
+                  </div>
+                </form>
+              </>
+            )}
           </div>
         </div>
       )}

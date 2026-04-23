@@ -38,6 +38,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   const nav = [
     { label: "Проекты", href: "/dashboard", icon: "LayoutGrid" },
+    { label: "UI Kit", href: "/dashboard/ui-kit", icon: "Palette" },
+    { label: "Editor", href: "/dashboard/editor", icon: "Code" },
+    { label: "CLI", href: "/dashboard/cli", icon: "Terminal" },
     { label: "Команда", href: "/dashboard/team", icon: "Users" },
     { label: "Настройки", href: "/dashboard/settings", icon: "Settings" },
   ];
