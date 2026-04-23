@@ -570,10 +570,9 @@ def handle_ai_chat(body):
     if not project_id or not user_id or not user_message:
         return resp(400, {'error': 'project_id, user_id и message обязательны'})
 
-    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
+    api_key = (os.environ.get('OPENROUTER_API_KEY') or os.environ.get('API_KEY') or os.environ.get('OPENAI_API_KEY') or '').strip()
     if not api_key:
-        return resp(503, {'error': 'OPENROUTER_API_KEY не найден'})
-    return resp(200, {'debug': 'key_len=%d first=%s last=%s repr=%s' % (len(api_key), api_key[:8], api_key[-4:], repr(api_key[:20]))})
+        return resp(503, {'error': 'API ключ не найден. Добавьте OPENROUTER_API_KEY в секреты.'})
 
     conn = get_conn(); cur = conn.cursor()
 
