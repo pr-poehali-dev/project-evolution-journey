@@ -1,14 +1,38 @@
 import { useState } from "react";
+import func2url from "../../backend/func2url.json";
 
 export default function Signup() {
   const [plan, setPlan] = useState<"free" | "pro">("free");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const [submitted, setSubmitted] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitted(true);
+    setError("");
+    setLoading(true);
+
+    try {
+      const res = await fetch(func2url.register, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, plan }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || "Что-то пошло не так. Попробуйте ещё раз.");
+      } else {
+        setSubmitted(true);
+      }
+    } catch {
+      setError("Ошибка соединения. Попробуйте ещё раз.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -24,16 +48,14 @@ export default function Signup() {
       {submitted ? (
         <div className="w-full max-w-md border border-blue-400 bg-blue-400/5 p-10 text-center">
           <div className="text-4xl mb-4">🚀</div>
-          <h3 className="text-2xl font-bold text-neutral-900 mb-2">Вы в списке!</h3>
+          <h3 className="text-2xl font-bold text-neutral-900 mb-2">Добро пожаловать!</h3>
           <p className="text-neutral-500 text-sm">
-            Мы отправим письмо на <span className="text-neutral-900 font-medium">{email}</span> как только платформа откроется.
+            Аккаунт для <span className="text-neutral-900 font-medium">{email}</span> успешно создан.{" "}
+            Тариф: <span className="text-neutral-900 font-medium">{plan === "free" ? "Старт (3 дня бесплатно)" : "Pro — 500 ₽/мес"}</span>.
           </p>
         </div>
       ) : (
-        <form
-          onSubmit={handleSubmit}
-          className="w-full max-w-md flex flex-col gap-5"
-        >
+        <form onSubmit={handleSubmit} className="w-full max-w-md flex flex-col gap-5">
           <div className="flex gap-3">
             <button
               type="button"
@@ -84,11 +106,18 @@ export default function Signup() {
             />
           </div>
 
+          {error && (
+            <p className="text-red-500 text-sm border border-red-200 bg-red-50 px-4 py-3">
+              {error}
+            </p>
+          )}
+
           <button
             type="submit"
-            className="bg-neutral-900 text-white py-3 px-6 uppercase text-sm tracking-wide font-medium hover:bg-blue-400 transition-colors duration-300 mt-2"
+            disabled={loading}
+            className="bg-neutral-900 text-white py-3 px-6 uppercase text-sm tracking-wide font-medium hover:bg-blue-400 transition-colors duration-300 mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {plan === "free" ? "Начать бесплатно" : "Подключить Pro"}
+            {loading ? "Регистрация..." : plan === "free" ? "Начать бесплатно" : "Подключить Pro"}
           </button>
 
           <p className="text-center text-xs text-neutral-400">

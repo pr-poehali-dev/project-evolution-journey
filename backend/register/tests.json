@@ -1,0 +1,28 @@
+{
+  "tests": [
+    {
+      "name": "OPTIONS preflight",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200
+    },
+    {
+      "name": "Повторная регистрация — ошибка",
+      "method": "POST",
+      "path": "/",
+      "body": {"email": "test_clodev@example.com", "password": "securepass123", "plan": "free"},
+      "expectedStatus": 409,
+      "expectedBody": {"error": "Пользователь с таким email уже существует"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Пустой email — ошибка",
+      "method": "POST",
+      "path": "/",
+      "body": {"email": "", "password": "securepass123"},
+      "expectedStatus": 400,
+      "expectedBody": {"error": "Email и пароль обязательны"},
+      "bodyMatcher": "partial"
+    }
+  ]
+}
