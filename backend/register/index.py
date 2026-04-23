@@ -646,6 +646,10 @@ def handle_ai_chat(body):
         with urllib.request.urlopen(req, timeout=30) as r:
             result = json.loads(r.read())
         ai_reply = result['choices'][0]['message']['content']
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='ignore')
+        cur.close(); conn.close()
+        return resp(500, {'error': 'Ошибка AI %d: %s' % (e.code, body)})
     except Exception as e:
         cur.close(); conn.close()
         return resp(500, {'error': 'Ошибка AI: %s' % str(e)})
