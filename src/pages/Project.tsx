@@ -13,23 +13,20 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: "text-neutral-500 bg-neutral-500/10",
 };
 
-type Deployment = {
-  id: number; status: string; branch: string; commit_sha: string;
-  commit_message: string; url: string; build_log: string;
-  duration_seconds: number; created_at: string; finished_at: string;
-};
+type Deployment = { id: number; status: string; branch: string; commit_sha: string; commit_message: string; url: string; build_log: string; duration_seconds: number; created_at: string; finished_at: string; };
 type Domain = { id: number; domain: string; verified: boolean };
-type ProjectData = {
-  id: number; name: string; repo_url: string; framework: string;
-  domain: string; env_vars: Record<string, string>; created_at: string;
-};
+type AnalyticsRow = { date: string; views: number; unique_visitors: number; bandwidth_mb: number; requests: number };
+type Webhook = { id: number; url: string; events: string; active: boolean; created_at: string };
+type ProjectData = { id: number; name: string; repo_url: string; framework: string; domain: string; env_vars: Record<string, string>; created_at: string; };
+
+type Tab = "deployments" | "analytics" | "env" | "domains" | "webhooks" | "settings";
 
 export default function Project() {
   const { id } = useParams();
   const user = getUser();
   const navigate = useNavigate();
 
-  const [tab, setTab] = useState<"deployments" | "env" | "domains" | "settings">("deployments");
+  const [tab, setTab] = useState<Tab>("deployments");
   const [project, setProject] = useState<ProjectData | null>(null);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [domains, setDomains] = useState<Domain[]>([]);
@@ -37,80 +34,91 @@ export default function Project() {
   const [selectedLog, setSelectedLog] = useState<Deployment | null>(null);
 
   const [deploying, setDeploying] = useState(false);
+  const [deployBranch, setDeployBranch] = useState("main");
+
   const [envVars, setEnvVars] = useState<Record<string, string>>({});
-  const [newEnvKey, setNewEnvKey] = useState("");
-  const [newEnvVal, setNewEnvVal] = useState("");
+  const [newEnvKey, setNewEnvKey] = useState(""); const [newEnvVal, setNewEnvVal] = useState("");
   const [envSaving, setEnvSaving] = useState(false);
-  const [newDomain, setNewDomain] = useState("");
-  const [domainAdding, setDomainAdding] = useState(false);
+
+  const [newDomain, setNewDomain] = useState(""); const [domainAdding, setDomainAdding] = useState(false);
+
+  const [analytics, setAnalytics] = useState<AnalyticsRow[]>([]);
+  const [totals, setTotals] = useState<Record<string, number>>({});
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+
+  const [webhooks, setWebhooks] = useState<Webhook[]>([]);
+  const [newWHUrl, setNewWHUrl] = useState(""); const [newWHEvents, setNewWHEvents] = useState("deploy.ready,deploy.error");
+  const [whAdding, setWhAdding] = useState(false); const [whSecret, setWhSecret] = useState("");
 
   const load = async () => {
     if (!user || !id) return;
     setLoading(true);
     const data = await apiGet("project", { project_id: id, user_id: String(user.user_id) });
-    if (data.project) {
-      setProject(data.project);
-      setDeployments(data.deployments || []);
-      setDomains(data.domains || []);
-      setEnvVars(data.project.env_vars || {});
-    }
+    if (data.project) { setProject(data.project); setDeployments(data.deployments || []); setDomains(data.domains || []); setEnvVars(data.project.env_vars || {}); }
     setLoading(false);
   };
 
+  const loadAnalytics = async () => {
+    if (!user || !id) return;
+    setAnalyticsLoading(true);
+    const data = await apiGet("analytics", { project_id: id, user_id: String(user.user_id) });
+    setAnalytics((data.analytics || []).reverse());
+    setTotals(data.totals || {});
+    setAnalyticsLoading(false);
+  };
+
+  const loadWebhooks = async () => {
+    if (!user || !id) return;
+    const data = await apiGet("webhooks", { project_id: id, user_id: String(user.user_id) });
+    setWebhooks(data.webhooks || []);
+  };
+
   useEffect(() => { load(); }, [id]);
+  useEffect(() => { if (tab === "analytics" && analytics.length === 0) loadAnalytics(); }, [tab]);
+  useEffect(() => { if (tab === "webhooks") loadWebhooks(); }, [tab]);
 
   const handleDeploy = async () => {
     if (!user || !id) return;
     setDeploying(true);
-    await apiPost("deploy", { project_id: Number(id), user_id: user.user_id, commit_message: "Manual deploy" });
+    await apiPost("deploy", { project_id: Number(id), user_id: user.user_id, branch: deployBranch, commit_message: "Manual deploy" });
     setDeploying(false);
     load();
   };
 
-  const handleSaveEnv = async () => {
-    if (!user || !id) return;
-    setEnvSaving(true);
-    await apiPost("update_env", { project_id: Number(id), user_id: user.user_id, env_vars: envVars });
-    setEnvSaving(false);
+  const handleSaveEnv = async () => { if (!user || !id) return; setEnvSaving(true); await apiPost("update_env", { project_id: Number(id), user_id: user.user_id, env_vars: envVars }); setEnvSaving(false); };
+  const handleAddEnv = () => { if (!newEnvKey.trim()) return; setEnvVars((p) => ({ ...p, [newEnvKey.trim()]: newEnvVal })); setNewEnvKey(""); setNewEnvVal(""); };
+  const handleAddDomain = async () => { if (!newDomain.trim() || !user || !id) return; setDomainAdding(true); await apiPost("add_domain", { project_id: Number(id), user_id: user.user_id, domain: newDomain.trim() }); setNewDomain(""); setDomainAdding(false); load(); };
+
+  const handleAddWebhook = async () => {
+    if (!newWHUrl.trim() || !user || !id) return;
+    setWhAdding(true);
+    const { data } = await apiPost("add_webhook", { project_id: Number(id), user_id: user.user_id, url: newWHUrl.trim(), events: newWHEvents });
+    setWhAdding(false);
+    if (data.secret) setWhSecret(data.secret);
+    setNewWHUrl(""); loadWebhooks();
   };
 
-  const handleAddEnv = () => {
-    if (!newEnvKey.trim()) return;
-    setEnvVars((prev) => ({ ...prev, [newEnvKey.trim()]: newEnvVal }));
-    setNewEnvKey(""); setNewEnvVal("");
-  };
-
-  const handleAddDomain = async () => {
-    if (!newDomain.trim() || !user || !id) return;
-    setDomainAdding(true);
-    await apiPost("add_domain", { project_id: Number(id), user_id: user.user_id, domain: newDomain.trim() });
-    setNewDomain(""); setDomainAdding(false);
-    load();
+  const handleToggleWH = async (whId: number, active: boolean) => {
+    if (!user) return;
+    await apiPost("toggle_webhook", { webhook_id: whId, user_id: user.user_id, active });
+    loadWebhooks();
   };
 
   const fmt = (iso: string) => iso ? new Date(iso).toLocaleString("ru-RU") : "—";
+  const fmtDate = (s: string) => new Date(s).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  const maxViews = Math.max(...analytics.map((a) => a.views), 1);
 
-  const tabs = [
+  const tabs: { key: Tab; label: string; icon: string }[] = [
     { key: "deployments", label: "Деплои", icon: "Rocket" },
+    { key: "analytics", label: "Аналитика", icon: "BarChart2" },
     { key: "env", label: "Переменные", icon: "Key" },
     { key: "domains", label: "Домены", icon: "Globe" },
+    { key: "webhooks", label: "Webhooks", icon: "Webhook" },
     { key: "settings", label: "Настройки", icon: "Settings" },
-  ] as const;
+  ];
 
-  if (loading) return (
-    <DashboardLayout>
-      <div className="flex items-center justify-center py-32 text-neutral-500">Загрузка...</div>
-    </DashboardLayout>
-  );
-
-  if (!project) return (
-    <DashboardLayout>
-      <div className="flex flex-col items-center py-32 text-neutral-500">
-        <p className="mb-4">Проект не найден</p>
-        <button onClick={() => navigate("/dashboard")} className="text-blue-400 text-sm hover:underline">← Назад</button>
-      </div>
-    </DashboardLayout>
-  );
+  if (loading) return <DashboardLayout><div className="flex items-center justify-center py-32 text-neutral-500">Загрузка...</div></DashboardLayout>;
+  if (!project) return <DashboardLayout><div className="flex flex-col items-center py-32 text-neutral-500"><p className="mb-4">Проект не найден</p><button onClick={() => navigate("/dashboard")} className="text-blue-400 text-sm hover:underline">← Назад</button></div></DashboardLayout>;
 
   return (
     <DashboardLayout>
@@ -119,88 +127,117 @@ export default function Project() {
           <div className="bg-neutral-900 border border-neutral-700 w-full max-w-2xl p-6 max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold">Лог деплоя #{selectedLog.id}</h3>
-              <button onClick={() => setSelectedLog(null)} className="text-neutral-400 hover:text-white"><Icon name="X" size={16} /></button>
+              <button onClick={() => setSelectedLog(null)}><Icon name="X" size={16} /></button>
             </div>
-            <pre className="text-xs text-green-400 bg-black p-4 rounded font-mono leading-relaxed whitespace-pre-wrap">
-              {selectedLog.build_log || "Лог недоступен"}
-            </pre>
+            <pre className="text-xs text-green-400 bg-black p-4 font-mono leading-relaxed whitespace-pre-wrap">{selectedLog.build_log || "Лог недоступен"}</pre>
+          </div>
+        </div>
+      )}
+
+      {whSecret && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center px-6" onClick={() => setWhSecret("")}>
+          <div className="bg-neutral-900 border border-neutral-700 w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold mb-3">Webhook создан</h3>
+            <p className="text-neutral-400 text-sm mb-3">Сохраните секрет — он показывается только один раз:</p>
+            <code className="block bg-black text-green-400 text-xs p-3 break-all mb-4">{whSecret}</code>
+            <button onClick={() => setWhSecret("")} className="w-full py-2 bg-blue-400 text-black text-sm font-medium">Закрыть</button>
           </div>
         </div>
       )}
 
       <div className="flex items-center gap-3 mb-1">
-        <button onClick={() => navigate("/dashboard")} className="text-neutral-500 hover:text-white transition-colors">
-          <Icon name="ChevronLeft" size={16} />
-        </button>
+        <button onClick={() => navigate("/dashboard")} className="text-neutral-500 hover:text-white transition-colors"><Icon name="ChevronLeft" size={16} /></button>
         <h1 className="text-2xl font-bold">{project.name}</h1>
         <span className="text-xs bg-neutral-800 text-neutral-400 px-2 py-0.5 uppercase tracking-wide">{project.framework}</span>
       </div>
       <div className="flex items-center gap-4 mb-8 pl-7">
-        {project.domain && (
-          <a href={`https://${project.domain}`} target="_blank" rel="noreferrer" className="text-blue-400 text-sm hover:underline flex items-center gap-1">
-            <Icon name="ExternalLink" size={12} />
-            {project.domain}
-          </a>
-        )}
-        {project.repo_url && (
-          <a href={project.repo_url} target="_blank" rel="noreferrer" className="text-neutral-400 text-sm hover:text-white flex items-center gap-1">
-            <Icon name="Github" size={12} />
-            Репозиторий
-          </a>
-        )}
+        {project.domain && <a href={`https://${project.domain}`} target="_blank" rel="noreferrer" className="text-blue-400 text-sm hover:underline flex items-center gap-1"><Icon name="ExternalLink" size={12} />{project.domain}</a>}
+        {project.repo_url && <a href={project.repo_url} target="_blank" rel="noreferrer" className="text-neutral-400 text-sm hover:text-white flex items-center gap-1"><Icon name="Github" size={12} />Репозиторий</a>}
       </div>
 
-      <div className="flex gap-1 border-b border-neutral-800 mb-8">
+      <div className="flex gap-1 border-b border-neutral-800 mb-8 overflow-x-auto">
         {tabs.map((t) => (
-          <button
-            key={t.key} onClick={() => setTab(t.key)}
-            className={`flex items-center gap-2 px-4 py-3 text-sm border-b-2 transition-colors -mb-px ${
-              tab === t.key ? "border-blue-400 text-white" : "border-transparent text-neutral-500 hover:text-neutral-300"
-            }`}
-          >
-            <Icon name={t.icon} size={13} />
-            {t.label}
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`flex items-center gap-2 px-4 py-3 text-sm border-b-2 transition-colors -mb-px whitespace-nowrap ${tab === t.key ? "border-blue-400 text-white" : "border-transparent text-neutral-500 hover:text-neutral-300"}`}>
+            <Icon name={t.icon} size={13} />{t.label}
           </button>
         ))}
         <div className="flex-1" />
-        <button
-          onClick={handleDeploy} disabled={deploying}
-          className="flex items-center gap-2 mb-2 px-4 py-1.5 bg-blue-400 text-black text-sm font-medium hover:bg-white transition-colors disabled:opacity-50 self-center"
-        >
-          <Icon name="Rocket" size={13} />
-          {deploying ? "Деплой..." : "Задеплоить"}
-        </button>
+        <div className="flex items-center gap-2 mb-2">
+          <input value={deployBranch} onChange={(e) => setDeployBranch(e.target.value)}
+            className="bg-neutral-800 border border-neutral-700 px-3 py-1.5 text-xs text-white w-24 focus:outline-none focus:border-blue-400" placeholder="main" />
+          <button onClick={handleDeploy} disabled={deploying}
+            className="flex items-center gap-2 px-4 py-1.5 bg-blue-400 text-black text-sm font-medium hover:bg-white transition-colors disabled:opacity-50">
+            <Icon name="Rocket" size={13} />{deploying ? "Деплой..." : "Задеплоить"}
+          </button>
+        </div>
       </div>
 
+      {/* DEPLOYMENTS */}
       {tab === "deployments" && (
         <div className="flex flex-col gap-2">
-          {deployments.length === 0 ? (
-            <p className="text-neutral-500 py-12 text-center">Нет деплоев</p>
-          ) : deployments.map((d) => (
+          {deployments.length === 0 ? <p className="text-neutral-500 py-12 text-center">Нет деплоев</p>
+          : deployments.map((d) => (
             <div key={d.id} className="border border-neutral-800 px-5 py-4 flex items-center gap-4 hover:border-neutral-700 transition-colors">
-              <span className={`text-xs px-2 py-0.5 uppercase tracking-wide rounded ${STATUS_COLORS[d.status] || "text-neutral-400 bg-neutral-800"}`}>
-                {d.status}
-              </span>
+              <span className={`text-xs px-2 py-0.5 uppercase tracking-wide rounded shrink-0 ${STATUS_COLORS[d.status] || "text-neutral-400 bg-neutral-800"}`}>{d.status}</span>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate">{d.commit_message || "—"}</p>
-                <p className="text-xs text-neutral-500 mt-0.5">
-                  {d.branch} · {d.commit_sha || "—"} · {fmt(d.created_at)}
-                  {d.duration_seconds ? ` · ${d.duration_seconds}с` : ""}
+                <p className="text-xs text-neutral-500 mt-0.5 flex items-center gap-2">
+                  <span className="flex items-center gap-1"><Icon name="GitBranch" size={10} />{d.branch}</span>
+                  <span>{d.commit_sha || "—"}</span>
+                  <span>{fmt(d.created_at)}</span>
+                  {d.duration_seconds ? <span>{d.duration_seconds}с</span> : null}
                 </p>
               </div>
-              {d.url && (
-                <a href={d.url} target="_blank" rel="noreferrer" className="text-neutral-400 hover:text-blue-400 transition-colors">
-                  <Icon name="ExternalLink" size={14} />
-                </a>
-              )}
-              <button onClick={() => setSelectedLog(d)} className="text-neutral-400 hover:text-white transition-colors">
-                <Icon name="ScrollText" size={14} />
-              </button>
+              {d.url && <a href={d.url} target="_blank" rel="noreferrer" className="text-neutral-400 hover:text-blue-400 transition-colors"><Icon name="ExternalLink" size={14} /></a>}
+              <button onClick={() => setSelectedLog(d)} className="text-neutral-400 hover:text-white transition-colors"><Icon name="ScrollText" size={14} /></button>
             </div>
           ))}
         </div>
       )}
 
+      {/* ANALYTICS */}
+      {tab === "analytics" && (
+        <div>
+          {analyticsLoading ? <p className="text-neutral-500">Загрузка...</p> : (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+                {[
+                  { label: "Просмотры", value: totals.views?.toLocaleString(), icon: "Eye" },
+                  { label: "Уникальные", value: totals.unique_visitors?.toLocaleString(), icon: "Users" },
+                  { label: "Запросы", value: totals.requests?.toLocaleString(), icon: "Zap" },
+                  { label: "Трафик", value: `${totals.bandwidth_mb?.toFixed(1)} МБ`, icon: "HardDrive" },
+                ].map((s) => (
+                  <div key={s.label} className="border border-neutral-800 p-5">
+                    <div className="flex items-center gap-2 text-neutral-500 text-xs uppercase tracking-wide mb-2"><Icon name={s.icon} size={12} />{s.label}</div>
+                    <div className="text-2xl font-bold text-blue-400">{s.value}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="border border-neutral-800 p-6">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-neutral-400 mb-6">Просмотры за 30 дней</h3>
+                <div className="flex items-end gap-1 h-32">
+                  {analytics.map((a) => (
+                    <div key={a.date} className="flex-1 flex flex-col items-center gap-1 group relative">
+                      <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-neutral-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                        {fmtDate(a.date)}: {a.views}
+                      </div>
+                      <div className="w-full bg-blue-400 rounded-sm hover:bg-blue-300 transition-colors cursor-default"
+                        style={{ height: `${Math.max(4, (a.views / maxViews) * 100)}%` }} />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-between text-xs text-neutral-600 mt-2">
+                  <span>{analytics.length > 0 ? fmtDate(analytics[0].date) : ""}</span>
+                  <span>{analytics.length > 0 ? fmtDate(analytics[analytics.length - 1].date) : ""}</span>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ENV VARS */}
       {tab === "env" && (
         <div className="max-w-2xl">
           <p className="text-neutral-400 text-sm mb-6">Переменные окружения доступны в сборке и runtime.</p>
@@ -208,14 +245,9 @@ export default function Project() {
             {Object.entries(envVars).map(([k, v]) => (
               <div key={k} className="flex items-center gap-3 border border-neutral-800 px-4 py-2.5">
                 <span className="text-sm font-mono text-blue-400 w-40 shrink-0 truncate">{k}</span>
-                <input
-                  value={v}
-                  onChange={(e) => setEnvVars((prev) => ({ ...prev, [k]: e.target.value }))}
-                  className="flex-1 bg-transparent text-sm text-white font-mono focus:outline-none"
-                />
-                <button onClick={() => setEnvVars((prev) => { const n = { ...prev }; delete n[k]; return n; })} className="text-neutral-600 hover:text-red-400 transition-colors">
-                  <Icon name="Trash2" size={13} />
-                </button>
+                <input value={v} onChange={(e) => setEnvVars((p) => ({ ...p, [k]: e.target.value }))}
+                  className="flex-1 bg-transparent text-sm text-white font-mono focus:outline-none" />
+                <button onClick={() => setEnvVars((p) => { const n = { ...p }; delete n[k]; return n; })} className="text-neutral-600 hover:text-red-400 transition-colors"><Icon name="Trash2" size={13} /></button>
               </div>
             ))}
           </div>
@@ -224,9 +256,7 @@ export default function Project() {
               className="flex-1 bg-neutral-900 border border-neutral-700 px-3 py-2 text-sm font-mono text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors" />
             <input value={newEnvVal} onChange={(e) => setNewEnvVal(e.target.value)} placeholder="value"
               className="flex-1 bg-neutral-900 border border-neutral-700 px-3 py-2 text-sm font-mono text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors" />
-            <button onClick={handleAddEnv} className="px-4 py-2 border border-neutral-700 text-neutral-300 hover:border-blue-400 transition-colors text-sm">
-              <Icon name="Plus" size={14} />
-            </button>
+            <button onClick={handleAddEnv} className="px-4 py-2 border border-neutral-700 text-neutral-300 hover:border-blue-400 transition-colors"><Icon name="Plus" size={14} /></button>
           </div>
           <button onClick={handleSaveEnv} disabled={envSaving} className="bg-blue-400 text-black px-6 py-2.5 text-sm font-medium hover:bg-white transition-colors disabled:opacity-50">
             {envSaving ? "Сохранение..." : "Сохранить"}
@@ -234,29 +264,25 @@ export default function Project() {
         </div>
       )}
 
+      {/* DOMAINS */}
       {tab === "domains" && (
         <div className="max-w-2xl">
           <p className="text-neutral-400 text-sm mb-6">Добавьте свой домен и настройте DNS.</p>
           <div className="flex flex-col gap-2 mb-6">
             {project.domain && (
               <div className="border border-neutral-800 px-5 py-3 flex items-center justify-between">
-                <div>
-                  <span className="text-sm font-medium">{project.domain}</span>
-                  <span className="ml-3 text-xs bg-green-400/10 text-green-400 px-2 py-0.5">Системный</span>
-                </div>
+                <div><span className="text-sm font-medium">{project.domain}</span><span className="ml-3 text-xs bg-green-400/10 text-green-400 px-2 py-0.5">Системный</span></div>
                 <Icon name="Check" size={14} className="text-green-400" />
               </div>
             )}
             {domains.map((d) => (
               <div key={d.id} className="border border-neutral-800 px-5 py-3 flex items-center justify-between">
                 <span className="text-sm font-medium">{d.domain}</span>
-                <span className={`text-xs px-2 py-0.5 ${d.verified ? "bg-green-400/10 text-green-400" : "bg-yellow-400/10 text-yellow-400"}`}>
-                  {d.verified ? "Активен" : "Ожидает DNS"}
-                </span>
+                <span className={`text-xs px-2 py-0.5 ${d.verified ? "bg-green-400/10 text-green-400" : "bg-yellow-400/10 text-yellow-400"}`}>{d.verified ? "Активен" : "Ожидает DNS"}</span>
               </div>
             ))}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 mb-6">
             <input value={newDomain} onChange={(e) => setNewDomain(e.target.value)} placeholder="mydomain.com"
               className="flex-1 bg-neutral-900 border border-neutral-700 px-4 py-2.5 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors" />
             <button onClick={handleAddDomain} disabled={domainAdding} className="px-5 py-2.5 bg-blue-400 text-black text-sm font-medium hover:bg-white transition-colors disabled:opacity-50">
@@ -264,14 +290,60 @@ export default function Project() {
             </button>
           </div>
           {domains.some((d) => !d.verified) && (
-            <div className="mt-6 border border-yellow-400/20 bg-yellow-400/5 p-4">
-              <p className="text-yellow-400 text-sm font-medium mb-2">Настройте DNS</p>
+            <div className="border border-yellow-400/20 bg-yellow-400/5 p-4">
+              <p className="text-yellow-400 text-sm font-medium mb-1">Настройте DNS</p>
               <p className="text-neutral-400 text-xs">Добавьте CNAME запись: <span className="font-mono text-white">cname.clodev.ru</span></p>
             </div>
           )}
         </div>
       )}
 
+      {/* WEBHOOKS */}
+      {tab === "webhooks" && (
+        <div className="max-w-2xl">
+          <p className="text-neutral-400 text-sm mb-6">Получайте HTTP-уведомления о событиях деплоя.</p>
+          <div className="flex flex-col gap-2 mb-8">
+            {webhooks.length === 0 ? <p className="text-neutral-600 text-sm">Webhooks не настроены</p>
+            : webhooks.map((w) => (
+              <div key={w.id} className="border border-neutral-800 px-5 py-4 flex items-center gap-4">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-mono text-white truncate">{w.url}</p>
+                  <p className="text-xs text-neutral-500 mt-1">{w.events}</p>
+                </div>
+                <button onClick={() => handleToggleWH(w.id, !w.active)}
+                  className={`text-xs px-3 py-1 border transition-colors ${w.active ? "border-green-500/40 text-green-400 hover:bg-green-500/10" : "border-neutral-700 text-neutral-500 hover:border-neutral-500"}`}>
+                  {w.active ? "Активен" : "Отключён"}
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="border border-neutral-800 p-5">
+            <h3 className="text-sm font-semibold mb-4">Добавить webhook</h3>
+            <div className="flex flex-col gap-3">
+              <input value={newWHUrl} onChange={(e) => setNewWHUrl(e.target.value)} placeholder="https://your-server.com/webhook"
+                className="bg-neutral-900 border border-neutral-700 px-4 py-2.5 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors" />
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-neutral-500 uppercase tracking-wide">События</label>
+                <div className="flex flex-wrap gap-2">
+                  {["deploy.ready", "deploy.error", "deploy.queued"].map((ev) => (
+                    <label key={ev} className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={newWHEvents.includes(ev)}
+                        onChange={(e) => setNewWHEvents((prev) => e.target.checked ? [...new Set([...prev.split(","), ev])].join(",") : prev.split(",").filter((x) => x !== ev).join(","))}
+                        className="accent-blue-400" />
+                      <span className="text-neutral-300 font-mono text-xs">{ev}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <button onClick={handleAddWebhook} disabled={whAdding} className="bg-blue-400 text-black px-5 py-2.5 text-sm font-medium hover:bg-white transition-colors disabled:opacity-50 w-fit">
+                {whAdding ? "Создание..." : "Создать webhook"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SETTINGS */}
       {tab === "settings" && (
         <div className="max-w-2xl">
           <div className="border border-neutral-800 p-6 mb-4">
@@ -285,17 +357,9 @@ export default function Project() {
           </div>
           <div className="border border-red-900/50 p-6">
             <h3 className="font-semibold text-red-400 mb-2">Опасная зона</h3>
-            <p className="text-neutral-400 text-sm mb-4">Удаление проекта необратимо. Все деплои и настройки будут удалены.</p>
-            <button
-              onClick={async () => {
-                if (!confirm("Удалить проект?")) return;
-                await apiPost("delete_project", { project_id: Number(id), user_id: user!.user_id });
-                navigate("/dashboard");
-              }}
-              className="border border-red-500 text-red-400 px-4 py-2 text-sm hover:bg-red-500 hover:text-white transition-colors"
-            >
-              Удалить проект
-            </button>
+            <p className="text-neutral-400 text-sm mb-4">Удаление проекта необратимо.</p>
+            <button onClick={async () => { if (!confirm("Удалить проект?")) return; await apiPost("delete_project", { project_id: Number(id), user_id: user!.user_id }); navigate("/dashboard"); }}
+              className="border border-red-500 text-red-400 px-4 py-2 text-sm hover:bg-red-500 hover:text-white transition-colors">Удалить проект</button>
           </div>
         </div>
       )}
