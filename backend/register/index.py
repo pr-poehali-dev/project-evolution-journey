@@ -570,7 +570,9 @@ def handle_ai_chat(body):
 
     api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
     if not api_key:
-        return resp(503, {'error': 'AI-ассистент не настроен. Добавьте OPENROUTER_API_KEY в секреты. Доступные переменные: %s' % [k for k in os.environ if 'KEY' in k or 'API' in k]})
+        return resp(503, {'error': 'OPENROUTER_API_KEY не найден'})
+    if not api_key.startswith('sk-'):
+        return resp(503, {'error': 'Ключ неверный формат: первые 10 символов: [%s]' % api_key[:10]})
 
     conn = get_conn(); cur = conn.cursor()
 
