@@ -568,9 +568,9 @@ def handle_ai_chat(body):
     if not project_id or not user_id or not user_message:
         return resp(400, {'error': 'project_id, user_id и message обязательны'})
 
-    api_key = os.environ.get('OPENAI_API_KEY', '')
+    api_key = os.environ.get('OPENROUTER_API_KEY', '')
     if not api_key:
-        return resp(503, {'error': 'AI-ассистент не настроен. Добавьте OPENAI_API_KEY в секреты.'})
+        return resp(503, {'error': 'AI-ассистент не настроен. Добавьте OPENROUTER_API_KEY в секреты.'})
 
     conn = get_conn(); cur = conn.cursor()
 
@@ -630,16 +630,21 @@ def handle_ai_chat(body):
     messages.append({'role': 'user', 'content': user_message})
 
     payload = json.dumps({
-        'model': 'gpt-4o-mini',
+        'model': 'openai/gpt-4o-mini',
         'messages': messages,
         'max_tokens': 2000,
         'temperature': 0.7
     }).encode()
 
     req = urllib.request.Request(
-        'https://api.openai.com/v1/chat/completions',
+        'https://openrouter.ai/api/v1/chat/completions',
         data=payload,
-        headers={'Content-Type': 'application/json', 'Authorization': 'Bearer %s' % api_key},
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer %s' % api_key,
+            'HTTP-Referer': 'https://clodev.ru',
+            'X-Title': 'CLODEV AI Assistant'
+        },
         method='POST'
     )
     try:
