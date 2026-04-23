@@ -568,9 +568,9 @@ def handle_ai_chat(body):
     if not project_id or not user_id or not user_message:
         return resp(400, {'error': 'project_id, user_id и message обязательны'})
 
-    api_key = os.environ.get('OPENROUTER_API_KEY', '')
+    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
     if not api_key:
-        return resp(503, {'error': 'AI-ассистент не настроен. Добавьте OPENROUTER_API_KEY в секреты.'})
+        return resp(503, {'error': 'AI-ассистент не настроен. Добавьте OPENROUTER_API_KEY в секреты. Доступные переменные: %s' % [k for k in os.environ if 'KEY' in k or 'API' in k]})
 
     conn = get_conn(); cur = conn.cursor()
 
