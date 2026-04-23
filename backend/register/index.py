@@ -226,6 +226,7 @@ def handle_deploy(body):
     )
     # Webhook
     fire_webhooks(int(project_id), 'deploy.ready', {'project': proj_name, 'branch': branch, 'sha': sha, 'url': deploy_url, 'deployment_id': dep_id})
+    notify_integrations(int(user_id), 'deploy.ready', {'project': proj_name, 'branch': branch, 'url': deploy_url})
     return resp(201, {'success': True, 'deployment_id': dep_id, 'status': 'ready', 'url': deploy_url})
 
 
@@ -460,6 +461,205 @@ def handle_mark_read(body):
     cur.execute("UPDATE %s.notifications SET read = TRUE WHERE user_id = %s" % (SCHEMA, int(user_id)))
     conn.commit(); cur.close(); conn.close()
     return resp(200, {'success': True})
+
+
+# ── ROLLBACK ──────────────────────────────────────────────────────────────────
+
+def handle_rollback(body):
+    project_id = body.get('project_id')
+    user_id = body.get('user_id')
+    deployment_id = body.get('deployment_id')
+    if not project_id or not user_id or not deployment_id:
+        return resp(400, {'error': 'project_id, user_id и deployment_id обязательны'})
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "SELECT d.id, d.branch, d.commit_sha, d.commit_message, d.url, p.name FROM %s.deployments d JOIN %s.projects p ON p.id = d.project_id WHERE d.id = %s AND p.user_id = %s AND d.status = 'ready'"
+        % (SCHEMA, SCHEMA, int(deployment_id), int(user_id))
+    )
+    dep = cur.fetchone()
+    if not dep:
+        cur.close(); conn.close()
+        return resp(404, {'error': 'Деплой не найден или не в статусе ready'})
+    _, branch, sha, msg, url, proj_name = dep
+    new_msg = 'Rollback to %s: %s' % (sha[:7], msg[:60])
+    cur.execute(
+        "INSERT INTO %s.deployments (project_id, status, branch, commit_sha, commit_message, url, build_log, duration_seconds, finished_at) VALUES (%s, 'ready', '%s', '%s', '%s', '%s', 'Rollback деплой — восстановление предыдущей версии', 8, NOW()) RETURNING id"
+        % (SCHEMA, int(project_id), branch, sha, new_msg.replace("'","''"), url)
+    )
+    new_id = cur.fetchone()[0]
+    cur.execute("UPDATE %s.projects SET updated_at = NOW() WHERE id = %s" % (SCHEMA, int(project_id)))
+    cur.execute(
+        "INSERT INTO %s.notifications (user_id, project_id, type, message) VALUES (%s, %s, 'deploy.ready', 'Rollback проекта %s выполнен успешно')"
+        % (SCHEMA, int(user_id), int(project_id), proj_name.replace("'","''"))
+    )
+    conn.commit(); cur.close(); conn.close()
+    return resp(201, {'success': True, 'deployment_id': new_id})
+
+
+# ── USAGE ──────────────────────────────────────────────────────────────────────
+
+def handle_get_usage(params):
+    project_id = params.get('project_id', '')
+    user_id = params.get('user_id', '')
+    days = int(params.get('days', '30'))
+    if not project_id or not user_id:
+        return resp(400, {'error': 'project_id и user_id обязательны'})
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id FROM %s.projects WHERE id = %s AND user_id = %s" % (SCHEMA, int(project_id), int(user_id)))
+    if not cur.fetchone():
+        cur.close(); conn.close()
+        return resp(404, {'error': 'Проект не найден'})
+    cur.execute(
+        "SELECT date, bandwidth_mb, requests, build_seconds FROM %s.usage_stats WHERE project_id = %s AND date >= CURRENT_DATE - INTERVAL '%s days' ORDER BY date ASC"
+        % (SCHEMA, int(project_id), days)
+    )
+    rows = cur.fetchall()
+    cur.execute(
+        "SELECT COUNT(*), AVG(duration_seconds), SUM(CASE WHEN status='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) FROM %s.deployments WHERE project_id = %s AND created_at >= NOW() - INTERVAL '%s days'"
+        % (SCHEMA, int(project_id), days)
+    )
+    dep = cur.fetchone()
+    cur.close(); conn.close()
+    stats = [{'date': str(r[0]), 'bandwidth_mb': float(r[1] or 0), 'requests': int(r[2] or 0), 'build_seconds': int(r[3] or 0)} for r in rows]
+    total_bw = sum(s['bandwidth_mb'] for s in stats)
+    total_req = sum(s['requests'] for s in stats)
+    total_build = sum(s['build_seconds'] for s in stats)
+    return resp(200, {
+        'stats': stats,
+        'totals': {'bandwidth_mb': round(total_bw, 2), 'requests': total_req, 'build_seconds': total_build,
+                   'deploys': int(dep[0] or 0), 'avg_build_s': round(float(dep[1] or 0), 1),
+                   'success_deploys': int(dep[2] or 0), 'error_deploys': int(dep[3] or 0)}
+    })
+
+
+# ── ENV PER ENVIRONMENT ────────────────────────────────────────────────────────
+
+def handle_get_env_envs(params):
+    project_id = params.get('project_id', '')
+    user_id = params.get('user_id', '')
+    if not project_id or not user_id:
+        return resp(400, {'error': 'project_id и user_id обязательны'})
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "SELECT env_vars, env_production, env_preview, env_development FROM %s.projects WHERE id = %s AND user_id = %s"
+        % (SCHEMA, int(project_id), int(user_id))
+    )
+    row = cur.fetchone(); cur.close(); conn.close()
+    if not row:
+        return resp(404, {'error': 'Проект не найден'})
+    return resp(200, {'all': row[0] or {}, 'production': row[1] or {}, 'preview': row[2] or {}, 'development': row[3] or {}})
+
+
+def handle_update_env_envs(body):
+    project_id = body.get('project_id')
+    user_id = body.get('user_id')
+    env_type = body.get('env_type', 'all')
+    env_vars = body.get('env_vars', {})
+    if not project_id or not user_id:
+        return resp(400, {'error': 'project_id и user_id обязательны'})
+    col_map = {'all': 'env_vars', 'production': 'env_production', 'preview': 'env_preview', 'development': 'env_development'}
+    col = col_map.get(env_type, 'env_vars')
+    safe_env = json.dumps(env_vars, ensure_ascii=False).replace("'", "''")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "UPDATE %s.projects SET %s = '%s'::jsonb, updated_at = NOW() WHERE id = %s AND user_id = %s"
+        % (SCHEMA, col, safe_env, int(project_id), int(user_id))
+    )
+    conn.commit(); cur.close(); conn.close()
+    return resp(200, {'success': True})
+
+
+# ── INTEGRATIONS ───────────────────────────────────────────────────────────────
+
+def handle_get_integrations(params):
+    user_id = params.get('user_id', '')
+    if not user_id:
+        return resp(400, {'error': 'user_id обязателен'})
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "SELECT id, type, config, active, created_at FROM %s.integrations WHERE user_id = %s ORDER BY created_at DESC"
+        % (SCHEMA, int(user_id))
+    )
+    rows = cur.fetchall(); cur.close(); conn.close()
+    integrations = [{'id': r[0], 'type': r[1], 'config': r[2], 'active': r[3], 'created_at': r[4].isoformat()} for r in rows]
+    return resp(200, {'integrations': integrations})
+
+
+def handle_save_integration(body):
+    user_id = body.get('user_id')
+    int_type = body.get('type', '')
+    config = body.get('config', {})
+    int_id = body.get('id')
+    if not user_id or not int_type:
+        return resp(400, {'error': 'user_id и type обязательны'})
+    safe_cfg = json.dumps(config, ensure_ascii=False).replace("'", "''")
+    conn = get_conn(); cur = conn.cursor()
+    if int_id:
+        cur.execute(
+            "UPDATE %s.integrations SET config = '%s'::jsonb, active = TRUE, type = '%s' WHERE id = %s AND user_id = %s"
+            % (SCHEMA, safe_cfg, int_type, int(int_id), int(user_id))
+        )
+    else:
+        cur.execute(
+            "INSERT INTO %s.integrations (user_id, type, config) VALUES (%s, '%s', '%s'::jsonb) RETURNING id"
+            % (SCHEMA, int(user_id), int_type, safe_cfg)
+        )
+        int_id = cur.fetchone()[0]
+    conn.commit(); cur.close(); conn.close()
+    return resp(200, {'success': True, 'id': int_id})
+
+
+def handle_toggle_integration(body):
+    user_id = body.get('user_id')
+    int_id = body.get('id')
+    active = body.get('active', True)
+    if not user_id or not int_id:
+        return resp(400, {'error': 'user_id и id обязательны'})
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "UPDATE %s.integrations SET active = %s WHERE id = %s AND user_id = %s"
+        % (SCHEMA, active, int(int_id), int(user_id))
+    )
+    conn.commit(); cur.close(); conn.close()
+    return resp(200, {'success': True})
+
+
+def send_telegram(token: str, chat_id: str, text: str):
+    try:
+        payload = json.dumps({'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}).encode()
+        req = urllib.request.Request(
+            'https://api.telegram.org/bot%s/sendMessage' % token,
+            data=payload, headers={'Content-Type': 'application/json'}, method='POST'
+        )
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass
+
+
+def send_slack(webhook_url: str, text: str):
+    try:
+        payload = json.dumps({'text': text}).encode()
+        req = urllib.request.Request(webhook_url, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass
+
+
+def notify_integrations(user_id: int, event: str, data: dict):
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute(
+            "SELECT type, config FROM %s.integrations WHERE user_id = %s AND active = TRUE" % (SCHEMA, user_id)
+        )
+        rows = cur.fetchall(); cur.close(); conn.close()
+        for int_type, cfg in rows:
+            msg = '<b>CLODEV</b> — %s\nПроект: <b>%s</b>\nСобытие: %s' % (data.get('project',''), data.get('project',''), event)
+            if int_type == 'telegram' and cfg.get('token') and cfg.get('chat_id'):
+                send_telegram(cfg['token'], cfg['chat_id'], msg)
+            elif int_type == 'slack' and cfg.get('webhook_url'):
+                send_slack(cfg['webhook_url'], 'CLODEV | %s | Проект: %s | %s' % (event, data.get('project',''), data.get('url','')))
+    except Exception:
+        pass
 
 
 # ── EMAIL ─────────────────────────────────────────────────────────────────────
@@ -713,6 +913,9 @@ def handler(event: dict, context) -> dict:
         if action == 'webhooks':        return handle_get_webhooks(params)
         if action == 'notifications':   return handle_get_notifications(params)
         if action == 'ai_history':      return handle_get_ai_history(params)
+        if action == 'usage':           return handle_get_usage(params)
+        if action == 'env_envs':        return handle_get_env_envs(params)
+        if action == 'integrations':    return handle_get_integrations(params)
         return resp(400, {'error': 'Неизвестный action'})
 
     body = json.loads(event.get('body') or '{}')
@@ -734,8 +937,12 @@ def handler(event: dict, context) -> dict:
         'add_webhook':     handle_add_webhook,
         'toggle_webhook':  handle_toggle_webhook,
         'mark_read':       handle_mark_read,
-        'ai_chat':         handle_ai_chat,
-        'clear_ai_chat':   handle_clear_ai_chat,
+        'ai_chat':            handle_ai_chat,
+        'clear_ai_chat':      handle_clear_ai_chat,
+        'rollback':           handle_rollback,
+        'update_env_envs':    handle_update_env_envs,
+        'save_integration':   handle_save_integration,
+        'toggle_integration': handle_toggle_integration,
     }
 
     if action in routes:

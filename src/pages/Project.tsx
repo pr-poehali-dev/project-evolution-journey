@@ -19,7 +19,9 @@ type AnalyticsRow = { date: string; views: number; unique_visitors: number; band
 type Webhook = { id: number; url: string; events: string; active: boolean; created_at: string };
 type ProjectData = { id: number; name: string; repo_url: string; framework: string; domain: string; env_vars: Record<string, string>; created_at: string; };
 
-type Tab = "deployments" | "analytics" | "env" | "domains" | "webhooks" | "settings";
+type Tab = "deployments" | "analytics" | "usage" | "env" | "domains" | "webhooks" | "integrations" | "settings";
+type UsageStat = { date: string; bandwidth_mb: number; requests: number; build_seconds: number };
+type Integration = { id: number; type: string; config: Record<string, string>; active: boolean; created_at: string };
 
 export default function Project() {
   const { id } = useParams();
@@ -50,6 +52,19 @@ export default function Project() {
   const [newWHUrl, setNewWHUrl] = useState(""); const [newWHEvents, setNewWHEvents] = useState("deploy.ready,deploy.error");
   const [whAdding, setWhAdding] = useState(false); const [whSecret, setWhSecret] = useState("");
 
+  const [usageStats, setUsageStats] = useState<UsageStat[]>([]);
+  const [usageTotals, setUsageTotals] = useState<Record<string, number>>({});
+  const [usageLoading, setUsageLoading] = useState(false);
+
+  const [envTab, setEnvTab] = useState<"all" | "production" | "preview" | "development">("all");
+  const [envByEnv, setEnvByEnv] = useState<Record<string, Record<string, string>>>({ all: {}, production: {}, preview: {}, development: {} });
+
+  const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [intLoading, setIntLoading] = useState(false);
+  const [tgToken, setTgToken] = useState(""); const [tgChat, setTgChat] = useState("");
+  const [slackUrl, setSlackUrl] = useState("");
+  const [rollbacking, setRollbacking] = useState<number | null>(null);
+
   const load = async () => {
     if (!user || !id) return;
     setLoading(true);
@@ -73,9 +88,62 @@ export default function Project() {
     setWebhooks(data.webhooks || []);
   };
 
+  const loadUsage = async () => {
+    if (!user || !id) return;
+    setUsageLoading(true);
+    const data = await apiGet("usage", { project_id: id, user_id: String(user.user_id) });
+    setUsageStats(data.stats || []);
+    setUsageTotals(data.totals || {});
+    setUsageLoading(false);
+  };
+
+  const loadEnvEnvs = async () => {
+    if (!user || !id) return;
+    const data = await apiGet("env_envs", { project_id: id, user_id: String(user.user_id) });
+    setEnvByEnv({ all: data.all || {}, production: data.production || {}, preview: data.preview || {}, development: data.development || {} });
+  };
+
+  const loadIntegrations = async () => {
+    if (!user) return;
+    setIntLoading(true);
+    const data = await apiGet("integrations", { user_id: String(user.user_id) });
+    const list: Integration[] = data.integrations || [];
+    setIntegrations(list);
+    const tg = list.find((i) => i.type === "telegram");
+    const sl = list.find((i) => i.type === "slack");
+    if (tg) { setTgToken(tg.config.token || ""); setTgChat(tg.config.chat_id || ""); }
+    if (sl) { setSlackUrl(sl.config.webhook_url || ""); }
+    setIntLoading(false);
+  };
+
+  const handleRollback = async (depId: number) => {
+    if (!user || !id || !confirm("Откатить проект к этому деплою?")) return;
+    setRollbacking(depId);
+    await apiPost("rollback", { project_id: Number(id), user_id: user.user_id, deployment_id: depId });
+    setRollbacking(null);
+    load();
+  };
+
+  const handleSaveEnvEnv = async () => {
+    if (!user || !id) return;
+    setEnvSaving(true);
+    await apiPost("update_env_envs", { project_id: Number(id), user_id: user.user_id, env_type: envTab, env_vars: envByEnv[envTab] });
+    setEnvSaving(false);
+  };
+
+  const handleSaveIntegration = async (type: string, config: Record<string, string>) => {
+    if (!user) return;
+    const existing = integrations.find((i) => i.type === type);
+    await apiPost("save_integration", { user_id: user.user_id, type, config, id: existing?.id });
+    loadIntegrations();
+  };
+
   useEffect(() => { load(); }, [id]);
   useEffect(() => { if (tab === "analytics" && analytics.length === 0) loadAnalytics(); }, [tab]);
   useEffect(() => { if (tab === "webhooks") loadWebhooks(); }, [tab]);
+  useEffect(() => { if (tab === "usage") loadUsage(); }, [tab]);
+  useEffect(() => { if (tab === "env") loadEnvEnvs(); }, [tab]);
+  useEffect(() => { if (tab === "integrations") loadIntegrations(); }, [tab]);
 
   const handleDeploy = async () => {
     if (!user || !id) return;
@@ -111,9 +179,11 @@ export default function Project() {
   const tabs: { key: Tab; label: string; icon: string }[] = [
     { key: "deployments", label: "Деплои", icon: "Rocket" },
     { key: "analytics", label: "Аналитика", icon: "BarChart2" },
+    { key: "usage", label: "Usage", icon: "Activity" },
     { key: "env", label: "Переменные", icon: "Key" },
     { key: "domains", label: "Домены", icon: "Globe" },
     { key: "webhooks", label: "Webhooks", icon: "Webhook" },
+    { key: "integrations", label: "Интеграции", icon: "Plug" },
     { key: "settings", label: "Настройки", icon: "Settings" },
   ];
 
@@ -193,8 +263,15 @@ export default function Project() {
                   {d.duration_seconds ? <span>{d.duration_seconds}с</span> : null}
                 </p>
               </div>
+              {d.preview_url && <a href={d.preview_url} target="_blank" rel="noreferrer" className="text-xs text-purple-400 hover:underline flex items-center gap-1"><Icon name="Eye" size={10} />Preview</a>}
               {d.url && <a href={d.url} target="_blank" rel="noreferrer" className="text-neutral-400 hover:text-blue-400 transition-colors"><Icon name="ExternalLink" size={14} /></a>}
               <button onClick={() => setSelectedLog(d)} className="text-neutral-400 hover:text-white transition-colors"><Icon name="ScrollText" size={14} /></button>
+              {d.status === "ready" && (
+                <button onClick={() => handleRollback(d.id)} disabled={rollbacking === d.id}
+                  className="text-xs text-neutral-500 hover:text-yellow-400 transition-colors flex items-center gap-1 disabled:opacity-40">
+                  <Icon name="RotateCcw" size={12} />{rollbacking === d.id ? "..." : "Rollback"}
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -241,17 +318,79 @@ export default function Project() {
         </div>
       )}
 
+      {/* USAGE */}
+      {tab === "usage" && (
+        <div>
+          {usageLoading ? <p className="text-neutral-500">Загрузка...</p> : (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+                {[
+                  { label: "Трафик", value: `${usageTotals.bandwidth_mb?.toFixed(1) || 0} МБ`, icon: "HardDrive" },
+                  { label: "Запросы", value: (usageTotals.requests || 0).toLocaleString(), icon: "Zap" },
+                  { label: "Время сборок", value: `${Math.round((usageTotals.build_seconds || 0) / 60)} мин`, icon: "Clock" },
+                  { label: "Деплоев", value: String(usageTotals.deploys || 0), icon: "Rocket" },
+                ].map((s) => (
+                  <div key={s.label} className="border border-neutral-800 p-5">
+                    <div className="flex items-center gap-2 text-neutral-500 text-xs uppercase tracking-wide mb-2"><Icon name={s.icon} size={12} />{s.label}</div>
+                    <div className="text-2xl font-bold text-blue-400">{s.value}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div className="border border-neutral-800 p-5">
+                  <p className="text-xs text-neutral-500 uppercase tracking-wide mb-1">Успешных деплоев</p>
+                  <p className="text-2xl font-bold text-green-400">{usageTotals.success_deploys || 0}</p>
+                </div>
+                <div className="border border-neutral-800 p-5">
+                  <p className="text-xs text-neutral-500 uppercase tracking-wide mb-1">Ошибок деплоя</p>
+                  <p className="text-2xl font-bold text-red-400">{usageTotals.error_deploys || 0}</p>
+                </div>
+              </div>
+              {usageStats.length > 0 && (
+                <div className="border border-neutral-800 p-6">
+                  <h3 className="text-sm font-semibold uppercase tracking-wide text-neutral-400 mb-6">Запросы за 30 дней</h3>
+                  <div className="flex items-end gap-0.5 h-28">
+                    {(() => { const maxR = Math.max(...usageStats.map((s) => s.requests), 1); return usageStats.map((s) => (
+                      <div key={s.date} className="flex-1 group relative flex flex-col justify-end h-full">
+                        <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-neutral-800 text-white text-xs px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                          {fmtDate(s.date)}: {s.requests.toLocaleString()}
+                        </div>
+                        <div className="w-full bg-blue-400 hover:bg-blue-300 transition-colors" style={{ height: `${Math.max(2, (s.requests / maxR) * 100)}%` }} />
+                      </div>
+                    )); })()}
+                  </div>
+                  <div className="flex justify-between text-xs text-neutral-600 mt-2">
+                    <span>{usageStats.length > 0 ? fmtDate(usageStats[0].date) : ""}</span>
+                    <span>{usageStats.length > 0 ? fmtDate(usageStats[usageStats.length - 1].date) : ""}</span>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       {/* ENV VARS */}
       {tab === "env" && (
         <div className="max-w-2xl">
-          <p className="text-neutral-400 text-sm mb-6">Переменные окружения доступны в сборке и runtime.</p>
+          <div className="flex gap-1 mb-6 border border-neutral-800 p-1 w-fit">
+            {(["all", "production", "preview", "development"] as const).map((e) => (
+              <button key={e} onClick={() => setEnvTab(e)}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${envTab === e ? "bg-blue-400 text-black" : "text-neutral-400 hover:text-white"}`}>
+                {e === "all" ? "Все среды" : e === "production" ? "Production" : e === "preview" ? "Preview" : "Development"}
+              </button>
+            ))}
+          </div>
+          <p className="text-neutral-500 text-xs mb-4">
+            {envTab === "all" ? "Доступны во всех средах" : envTab === "production" ? "Только в продакшн деплоях" : envTab === "preview" ? "Только в preview ветках" : "Только локально (development)"}
+          </p>
           <div className="flex flex-col gap-2 mb-6">
-            {Object.entries(envVars).map(([k, v]) => (
+            {Object.entries(envByEnv[envTab] || {}).map(([k, v]) => (
               <div key={k} className="flex items-center gap-3 border border-neutral-800 px-4 py-2.5">
                 <span className="text-sm font-mono text-blue-400 w-40 shrink-0 truncate">{k}</span>
-                <input value={v} onChange={(e) => setEnvVars((p) => ({ ...p, [k]: e.target.value }))}
+                <input value={v} onChange={(e) => setEnvByEnv((p) => ({ ...p, [envTab]: { ...p[envTab], [k]: e.target.value } }))}
                   className="flex-1 bg-transparent text-sm text-white font-mono focus:outline-none" />
-                <button onClick={() => setEnvVars((p) => { const n = { ...p }; delete n[k]; return n; })} className="text-neutral-600 hover:text-red-400 transition-colors"><Icon name="Trash2" size={13} /></button>
+                <button onClick={() => setEnvByEnv((p) => { const n = { ...p[envTab] }; delete n[k]; return { ...p, [envTab]: n }; })} className="text-neutral-600 hover:text-red-400 transition-colors"><Icon name="Trash2" size={13} /></button>
               </div>
             ))}
           </div>
@@ -260,9 +399,10 @@ export default function Project() {
               className="flex-1 bg-neutral-900 border border-neutral-700 px-3 py-2 text-sm font-mono text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors" />
             <input value={newEnvVal} onChange={(e) => setNewEnvVal(e.target.value)} placeholder="value"
               className="flex-1 bg-neutral-900 border border-neutral-700 px-3 py-2 text-sm font-mono text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors" />
-            <button onClick={handleAddEnv} className="px-4 py-2 border border-neutral-700 text-neutral-300 hover:border-blue-400 transition-colors"><Icon name="Plus" size={14} /></button>
+            <button onClick={() => { if (!newEnvKey.trim()) return; setEnvByEnv((p) => ({ ...p, [envTab]: { ...p[envTab], [newEnvKey.trim()]: newEnvVal } })); setNewEnvKey(""); setNewEnvVal(""); }}
+              className="px-4 py-2 border border-neutral-700 text-neutral-300 hover:border-blue-400 transition-colors"><Icon name="Plus" size={14} /></button>
           </div>
-          <button onClick={handleSaveEnv} disabled={envSaving} className="bg-blue-400 text-black px-6 py-2.5 text-sm font-medium hover:bg-white transition-colors disabled:opacity-50">
+          <button onClick={handleSaveEnvEnv} disabled={envSaving} className="bg-blue-400 text-black px-6 py-2.5 text-sm font-medium hover:bg-white transition-colors disabled:opacity-50">
             {envSaving ? "Сохранение..." : "Сохранить"}
           </button>
         </div>
@@ -344,6 +484,77 @@ export default function Project() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* INTEGRATIONS */}
+      {tab === "integrations" && (
+        <div className="max-w-2xl">
+          {intLoading ? <p className="text-neutral-500">Загрузка...</p> : (
+            <div className="flex flex-col gap-6">
+              {/* Telegram */}
+              <div className="border border-neutral-800 p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-blue-500/20 rounded flex items-center justify-center text-sm">✈️</div>
+                    <div>
+                      <h3 className="font-semibold">Telegram</h3>
+                      <p className="text-neutral-500 text-xs">Уведомления о деплоях в Telegram</p>
+                    </div>
+                  </div>
+                  {integrations.find((i) => i.type === "telegram") && (
+                    <span className="text-xs bg-green-400/10 text-green-400 px-2 py-0.5">Подключён</span>
+                  )}
+                </div>
+                <div className="flex flex-col gap-2 mb-4">
+                  <input value={tgToken} onChange={(e) => setTgToken(e.target.value)} placeholder="Bot Token (от @BotFather)"
+                    className="bg-neutral-900 border border-neutral-700 px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors" />
+                  <input value={tgChat} onChange={(e) => setTgChat(e.target.value)} placeholder="Chat ID (от @userinfobot)"
+                    className="bg-neutral-900 border border-neutral-700 px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors" />
+                </div>
+                <button onClick={() => handleSaveIntegration("telegram", { token: tgToken, chat_id: tgChat })}
+                  disabled={!tgToken || !tgChat}
+                  className="px-4 py-2 bg-blue-400 text-black text-sm font-medium hover:bg-white transition-colors disabled:opacity-40">
+                  Сохранить
+                </button>
+              </div>
+
+              {/* Slack */}
+              <div className="border border-neutral-800 p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-purple-500/20 rounded flex items-center justify-center text-sm">#</div>
+                    <div>
+                      <h3 className="font-semibold">Slack</h3>
+                      <p className="text-neutral-500 text-xs">Уведомления о деплоях в Slack канал</p>
+                    </div>
+                  </div>
+                  {integrations.find((i) => i.type === "slack") && (
+                    <span className="text-xs bg-green-400/10 text-green-400 px-2 py-0.5">Подключён</span>
+                  )}
+                </div>
+                <input value={slackUrl} onChange={(e) => setSlackUrl(e.target.value)} placeholder="Slack Webhook URL"
+                  className="w-full bg-neutral-900 border border-neutral-700 px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors mb-4" />
+                <button onClick={() => handleSaveIntegration("slack", { webhook_url: slackUrl })}
+                  disabled={!slackUrl}
+                  className="px-4 py-2 bg-blue-400 text-black text-sm font-medium hover:bg-white transition-colors disabled:opacity-40">
+                  Сохранить
+                </button>
+              </div>
+
+              {/* GitHub — info */}
+              <div className="border border-neutral-800 p-6 opacity-60">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-neutral-700 rounded flex items-center justify-center"><Icon name="Github" size={16} /></div>
+                  <div>
+                    <h3 className="font-semibold">GitHub</h3>
+                    <p className="text-neutral-500 text-xs">Автодеплой при push — настраивается через репозиторий</p>
+                  </div>
+                  <span className="ml-auto text-xs bg-neutral-800 text-neutral-500 px-2 py-0.5">Скоро</span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
