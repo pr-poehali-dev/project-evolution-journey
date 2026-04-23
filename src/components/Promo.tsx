@@ -1,8 +1,10 @@
 import { useScroll, useTransform, motion } from "framer-motion";
 import { useRef } from "react";
+import { useContent } from "@/hooks/useContent";
 
 export default function Promo() {
   const container = useRef<HTMLDivElement>(null);
+  const { t } = useContent();
   const { scrollYProgress } = useScroll({
     target: container,
     offset: ["start end", "end start"],

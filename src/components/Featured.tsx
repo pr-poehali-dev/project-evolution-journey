@@ -1,3 +1,5 @@
+import { useContent } from "@/hooks/useContent";
+
 const features = [
   { icon: "⚡", title: "Мгновенный деплой", desc: "Push в Git — и ваш сайт уже в продакшне. Автоматическая сборка и публикация за секунды." },
   { icon: "🌐", title: "Edge-сеть", desc: "Глобальная CDN с точками присутствия по всему миру. Минимальная задержка для любого пользователя." },
@@ -6,6 +8,7 @@ const features = [
 ];
 
 export default function Featured() {
+  const { t } = useContent();
   return (
     <div id="features" className="flex flex-col lg:flex-row lg:justify-between lg:items-center min-h-screen px-6 py-12 lg:py-0 bg-white">
       <div className="flex-1 h-[400px] lg:h-[800px] mb-8 lg:mb-0 lg:order-2">
@@ -16,9 +19,9 @@ export default function Featured() {
         />
       </div>
       <div className="flex-1 text-left lg:h-[800px] flex flex-col justify-center lg:mr-12 lg:order-1">
-        <h3 className="uppercase mb-4 text-sm tracking-wide text-neutral-500">Возможности платформы</h3>
+        <h3 className="uppercase mb-4 text-sm tracking-wide text-neutral-500">{t("featured_subtitle", "Возможности платформы")}</h3>
         <p className="text-2xl lg:text-4xl mb-10 text-neutral-900 leading-tight font-bold">
-          Всё, что нужно для запуска — уже включено.
+          {t("featured_title", "Всё, что нужно для запуска — уже включено.")}
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-10">
           {features.map((f) => (
