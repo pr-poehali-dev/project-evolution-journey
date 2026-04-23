@@ -11,6 +11,7 @@ import Dashboard from "./pages/Dashboard";
 import Project from "./pages/Project";
 import DashboardSettings from "./pages/DashboardSettings";
 import Team from "./pages/Team";
+import AIAssistant from "./pages/AIAssistant";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -28,6 +29,7 @@ const App = () => (
           <Route path="/dashboard/project/:id" element={<Project />} />
           <Route path="/dashboard/settings" element={<DashboardSettings />} />
           <Route path="/dashboard/team" element={<Team />} />
+          <Route path="/dashboard/project/:id/ai" element={<AIAssistant />} />
           <Route path="/admin" element={<Admin />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />

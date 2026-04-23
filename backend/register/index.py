@@ -544,6 +544,139 @@ def handle_get_billing(body):
     return resp(200, {'users': users, 'stats': {'total': len(users), 'pro': pro_count, 'free': len(users) - pro_count, 'revenue': pro_count * 500}})
 
 
+# ── AI ASSISTANT ─────────────────────────────────────────────────────────────
+
+def handle_get_ai_history(params):
+    project_id = params.get('project_id', '')
+    user_id = params.get('user_id', '')
+    if not project_id or not user_id:
+        return resp(400, {'error': 'project_id и user_id обязательны'})
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "SELECT id, role, content, created_at FROM %s.ai_chats WHERE project_id = %s AND user_id = %s ORDER BY created_at ASC LIMIT 50"
+        % (SCHEMA, int(project_id), int(user_id))
+    )
+    rows = cur.fetchall(); cur.close(); conn.close()
+    messages = [{'id': r[0], 'role': r[1], 'content': r[2], 'created_at': r[3].isoformat()} for r in rows]
+    return resp(200, {'messages': messages})
+
+
+def handle_ai_chat(body):
+    project_id = body.get('project_id')
+    user_id = body.get('user_id')
+    user_message = (body.get('message') or '').strip()
+    if not project_id or not user_id or not user_message:
+        return resp(400, {'error': 'project_id, user_id и message обязательны'})
+
+    api_key = os.environ.get('OPENAI_API_KEY', '')
+    if not api_key:
+        return resp(503, {'error': 'AI-ассистент не настроен. Добавьте OPENAI_API_KEY в секреты.'})
+
+    conn = get_conn(); cur = conn.cursor()
+
+    # Получаем контекст проекта
+    cur.execute(
+        "SELECT name, framework, repo_url FROM %s.projects WHERE id = %s AND user_id = %s"
+        % (SCHEMA, int(project_id), int(user_id))
+    )
+    proj = cur.fetchone()
+    if not proj:
+        cur.close(); conn.close()
+        return resp(404, {'error': 'Проект не найден'})
+    proj_name, framework, repo_url = proj
+
+    # Последний деплой
+    cur.execute(
+        "SELECT status, build_log, commit_message FROM %s.deployments WHERE project_id = %s ORDER BY created_at DESC LIMIT 1"
+        % (SCHEMA, int(project_id))
+    )
+    dep = cur.fetchone()
+    dep_context = ''
+    if dep:
+        dep_context = '\nПоследний деплой: статус=%s, коммит=%s\nЛог: %s' % (dep[0], dep[2], (dep[1] or '')[:500])
+
+    # История чата (последние 10 сообщений)
+    cur.execute(
+        "SELECT role, content FROM %s.ai_chats WHERE project_id = %s AND user_id = %s ORDER BY created_at DESC LIMIT 10"
+        % (SCHEMA, int(project_id), int(user_id))
+    )
+    history = list(reversed(cur.fetchall()))
+
+    # Сохраняем сообщение пользователя
+    safe_msg = user_message.replace("'", "''")
+    cur.execute(
+        "INSERT INTO %s.ai_chats (project_id, user_id, role, content) VALUES (%s, %s, 'user', '%s')"
+        % (SCHEMA, int(project_id), int(user_id), safe_msg)
+    )
+    conn.commit()
+
+    # Формируем запрос к OpenAI
+    system_prompt = """Ты — AI-ассистент разработчика на платформе CLODEV (аналог Vercel).
+Проект: %s | Фреймворк: %s | Репозиторий: %s%s
+
+Твоя задача:
+- Генерировать код по запросу (компоненты, функции, конфиги)
+- Исправлять ошибки в коде
+- Анализировать логи деплоя и объяснять проблемы
+- Давать советы по архитектуре и оптимизации
+
+Отвечай на русском языке. Код оформляй в блоки с указанием языка. Будь конкретным и практичным.""" % (
+        proj_name, framework, repo_url or 'не указан', dep_context
+    )
+
+    messages = [{'role': 'system', 'content': system_prompt}]
+    for h in history:
+        messages.append({'role': h[0], 'content': h[1]})
+    messages.append({'role': 'user', 'content': user_message})
+
+    payload = json.dumps({
+        'model': 'gpt-4o-mini',
+        'messages': messages,
+        'max_tokens': 2000,
+        'temperature': 0.7
+    }).encode()
+
+    req = urllib.request.Request(
+        'https://api.openai.com/v1/chat/completions',
+        data=payload,
+        headers={'Content-Type': 'application/json', 'Authorization': 'Bearer %s' % api_key},
+        method='POST'
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            result = json.loads(r.read())
+        ai_reply = result['choices'][0]['message']['content']
+    except Exception as e:
+        cur.close(); conn.close()
+        return resp(500, {'error': 'Ошибка AI: %s' % str(e)})
+
+    # Сохраняем ответ ассистента
+    safe_reply = ai_reply.replace("'", "''")
+    cur.execute(
+        "INSERT INTO %s.ai_chats (project_id, user_id, role, content) VALUES (%s, %s, 'assistant', '%s') RETURNING id, created_at"
+        % (SCHEMA, int(project_id), int(user_id), safe_reply)
+    )
+    row = cur.fetchone()
+    conn.commit(); cur.close(); conn.close()
+
+    return resp(200, {'reply': ai_reply, 'message_id': row[0]})
+
+
+def handle_clear_ai_chat(body):
+    project_id = body.get('project_id')
+    user_id = body.get('user_id')
+    if not project_id or not user_id:
+        return resp(400, {'error': 'project_id и user_id обязательны'})
+    conn = get_conn(); cur = conn.cursor()
+    # Помечаем старые сообщения удалёнными через обновление (не DELETE)
+    cur.execute(
+        "UPDATE %s.ai_chats SET content = '[очищено]' WHERE project_id = %s AND user_id = %s"
+        % (SCHEMA, int(project_id), int(user_id))
+    )
+    conn.commit(); cur.close(); conn.close()
+    return resp(200, {'success': True})
+
+
 # ── ROUTER ────────────────────────────────────────────────────────────────────
 
 def handler(event: dict, context) -> dict:
@@ -569,6 +702,7 @@ def handler(event: dict, context) -> dict:
         if action == 'team':            return handle_get_team(params)
         if action == 'webhooks':        return handle_get_webhooks(params)
         if action == 'notifications':   return handle_get_notifications(params)
+        if action == 'ai_history':      return handle_get_ai_history(params)
         return resp(400, {'error': 'Неизвестный action'})
 
     body = json.loads(event.get('body') or '{}')
@@ -590,6 +724,8 @@ def handler(event: dict, context) -> dict:
         'add_webhook':     handle_add_webhook,
         'toggle_webhook':  handle_toggle_webhook,
         'mark_read':       handle_mark_read,
+        'ai_chat':         handle_ai_chat,
+        'clear_ai_chat':   handle_clear_ai_chat,
     }
 
     if action in routes:

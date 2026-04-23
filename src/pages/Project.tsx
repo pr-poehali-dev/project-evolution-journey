@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { getUser } from "@/lib/auth";
 import { apiGet, apiPost } from "@/lib/api";
@@ -164,6 +164,10 @@ export default function Project() {
         ))}
         <div className="flex-1" />
         <div className="flex items-center gap-2 mb-2">
+          <Link to={`/dashboard/project/${id}/ai`}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-neutral-700 text-neutral-300 text-sm hover:border-blue-400 hover:text-blue-400 transition-colors">
+            <span className="text-blue-400">✦</span> AI
+          </Link>
           <input value={deployBranch} onChange={(e) => setDeployBranch(e.target.value)}
             className="bg-neutral-800 border border-neutral-700 px-3 py-1.5 text-xs text-white w-24 focus:outline-none focus:border-blue-400" placeholder="main" />
           <button onClick={handleDeploy} disabled={deploying}
