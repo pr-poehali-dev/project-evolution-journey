@@ -6,7 +6,7 @@ export default function Header({ className }: HeaderProps) {
   return (
     <header className={`absolute top-0 left-0 right-0 z-10 p-6 ${className ?? ""}`}>
       <div className="flex justify-between items-center">
-        <div className="text-white text-lg font-bold tracking-tight">DEPLOY<span className="text-blue-400">X</span></div>
+        <div className="text-white text-lg font-bold tracking-tight">CLO<span className="text-blue-400">DEV</span></div>
         <nav className="flex gap-8 items-center">
           <a
             href="#features"
