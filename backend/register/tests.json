@@ -49,6 +49,14 @@
       "expectedStatus": 401,
       "expectedBody": {"error": "Нет доступа"},
       "bodyMatcher": "partial"
+    },
+    {
+      "name": "GET projects user_id=1",
+      "method": "GET",
+      "path": "/?action=projects&user_id=1",
+      "expectedStatus": 200,
+      "expectedBody": {"projects": []},
+      "bodyMatcher": "partial"
     }
   ]
 }
