@@ -6,6 +6,8 @@ import random
 import string
 import smtplib
 import urllib.request
+import http.client
+import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
@@ -636,27 +638,26 @@ def handle_ai_chat(body):
         'messages': messages,
         'max_tokens': 2000,
         'temperature': 0.7
-    }).encode()
+    }).encode('utf-8')
 
-    req = urllib.request.Request(
-        'https://openrouter.ai/api/v1/chat/completions',
-        data=payload,
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer %s' % api_key,
-            'HTTP-Referer': 'https://clodev.ru',
-            'X-Title': 'CLODEV AI Assistant'
-        },
-        method='POST'
-    )
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            result = json.loads(r.read())
+        ctx = ssl.create_default_context()
+        conn_http = http.client.HTTPSConnection('openrouter.ai', context=ctx, timeout=30)
+        conn_http.request('POST', '/api/v1/chat/completions', body=payload, headers={
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + api_key,
+            'HTTP-Referer': 'https://clodev.ru',
+            'X-Title': 'CLODEV AI Assistant',
+            'Content-Length': str(len(payload)),
+        })
+        r = conn_http.getresponse()
+        raw = r.read().decode('utf-8')
+        conn_http.close()
+        if r.status != 200:
+            cur.close(); conn.close()
+            return resp(500, {'error': 'Ошибка AI %d: %s' % (r.status, raw)})
+        result = json.loads(raw)
         ai_reply = result['choices'][0]['message']['content']
-    except urllib.error.HTTPError as e:
-        body = e.read().decode('utf-8', errors='ignore')
-        cur.close(); conn.close()
-        return resp(500, {'error': 'Ошибка AI %d: %s' % (e.code, body)})
     except Exception as e:
         cur.close(); conn.close()
         return resp(500, {'error': 'Ошибка AI: %s' % str(e)})
