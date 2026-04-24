@@ -27,12 +27,37 @@ BUILD_COMMANDS = {
 
 def run_cmd(cmd, cwd=None, env=None, log_lines=None):
     merged = {**os.environ, **(env or {})}
-    proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, env=merged)
+    # cmd может быть строкой (shell=True) или списком (shell=False)
+    use_shell = isinstance(cmd, str)
+    proc = subprocess.run(cmd, shell=use_shell, cwd=cwd, capture_output=True, text=True, env=merged)
     out = (proc.stdout + proc.stderr).strip()
     if log_lines is not None:
         for line in out.splitlines():
             log_lines.append(line)
     return proc.returncode, out
+
+
+def git_clone(repo_url, branch, dest_dir, log_lines=None):
+    """Клонирует репо безопасно через список аргументов (без shell=True)"""
+    # Пробуем с конкретной веткой
+    rc, out = run_cmd(
+        ['git', 'clone', '--depth', '1', '--branch', branch, repo_url, 'repo'],
+        cwd=dest_dir, log_lines=log_lines
+    )
+    if rc == 0:
+        return rc, out
+    # Если ветка не найдена — клонируем default
+    if log_lines is not None:
+        log_lines.append('[warn] ветка "%s" не найдена, клоную default...' % branch)
+    # Удаляем неполный клон если есть
+    repo_path = os.path.join(dest_dir, 'repo')
+    if os.path.exists(repo_path):
+        shutil.rmtree(repo_path)
+    rc2, out2 = run_cmd(
+        ['git', 'clone', '--depth', '1', repo_url, 'repo'],
+        cwd=dest_dir, log_lines=log_lines
+    )
+    return rc2, out2
 
 
 def detect_framework(repo_dir):
@@ -117,34 +142,37 @@ def git_deploy(body, conn, resp_fn):
     cur.execute("UPDATE %s.projects SET repo_url='%s', updated_at=NOW() WHERE id=%s" % (SCHEMA, safe_repo, int(project_id)))
     conn.commit()
 
+    # Нормализуем URL — убираем пробелы и невидимые символы
+    repo_url = repo_url.strip().strip('\u00ab\u00bb\u201c\u201d\u2018\u2019')
+
     log_lines = ['repo: %s' % repo_url, 'branch: %s' % branch]
     t0 = datetime.now()
     tmp = tempfile.mkdtemp()
 
     try:
+        # Строим URL с токеном для авторизации
         if git_token:
-            if 'github.com' in repo_url:
-                auth_url = repo_url.replace('https://', 'https://%s@' % git_token)
-            elif 'gitlab.com' in repo_url:
-                auth_url = repo_url.replace('https://', 'https://oauth2:%s@' % git_token)
-            elif 'bitbucket.org' in repo_url:
-                auth_url = repo_url.replace('https://', 'https://x-token-auth:%s@' % git_token)
+            token = git_token.strip()
+            if repo_url.startswith('https://'):
+                if 'gitlab.com' in repo_url:
+                    auth_url = 'https://oauth2:%s@%s' % (token, repo_url[len('https://'):])
+                elif 'bitbucket.org' in repo_url:
+                    auth_url = 'https://x-token-auth:%s@%s' % (token, repo_url[len('https://'):])
+                else:
+                    auth_url = 'https://%s@%s' % (token, repo_url[len('https://'):])
             else:
-                auth_url = repo_url.replace('https://', 'https://%s@' % git_token)
+                auth_url = repo_url
         else:
             auth_url = repo_url
 
         log_lines.append('\n[1/4] Клонирование...')
-        rc, out = run_cmd('git clone --depth 1 --branch "%s" "%s" repo 2>&1' % (branch, auth_url), cwd=tmp, log_lines=log_lines)
+        rc, out = git_clone(auth_url, branch, tmp, log_lines=log_lines)
         if rc != 0:
-            log_lines.append('[warn] ветка не найдена, клоную default...')
-            rc, out = run_cmd('git clone --depth 1 "%s" repo 2>&1' % auth_url, cwd=tmp, log_lines=log_lines)
-            if rc != 0:
-                raise RuntimeError('Не удалось клонировать:\n' + out[-500:])
+            raise RuntimeError('Не удалось клонировать репозиторий:\n' + out[-500:])
 
         repo_dir = os.path.join(tmp, 'repo')
-        _, sha = run_cmd('git rev-parse --short HEAD', cwd=repo_dir)
-        _, msg = run_cmd('git log -1 --pretty=%B', cwd=repo_dir)
+        _, sha = run_cmd(['git', 'rev-parse', '--short', 'HEAD'], cwd=repo_dir)
+        _, msg = run_cmd(['git', 'log', '-1', '--pretty=%B'], cwd=repo_dir)
         sha = (sha or 'unknown')[:7]
         msg = (msg or 'Git deploy').strip()[:200]
         log_lines.append('commit: %s — %s' % (sha, msg))
@@ -227,9 +255,10 @@ def git_deploy(body, conn, resp_fn):
 
 def git_detect(repo_url):
     """Автодетект фреймворка без деплоя — клонируем и читаем package.json"""
+    repo_url = repo_url.strip().strip('\u00ab\u00bb\u201c\u201d\u2018\u2019')
     tmp = tempfile.mkdtemp()
     try:
-        rc, out = run_cmd('git clone --depth 1 "%s" repo 2>&1' % repo_url, cwd=tmp)
+        rc, out = run_cmd(['git', 'clone', '--depth', '1', repo_url, 'repo'], cwd=tmp)
         if rc != 0:
             return None, out[-400:]
         repo_dir = os.path.join(tmp, 'repo')
