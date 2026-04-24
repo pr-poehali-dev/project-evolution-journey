@@ -68,10 +68,51 @@ export default function DeployFromGit() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [buildLog]);
 
+  const normalizeGitUrl = (raw: string): string => {
+    // Убираем пробелы, кавычки, невидимые символы
+    let url = raw.trim().replace(/[\u00ab\u00bb\u201c\u201d\u2018\u2019]/g, "");
+
+    // Убираем query-параметры типа ?ysclid=... которые браузер добавляет к скопированным ссылкам
+    try {
+      const u = new URL(url.startsWith("http") ? url : "https://" + url);
+      // Оставляем только origin + pathname
+      url = u.origin + u.pathname;
+    } catch {
+      // не URL — попробуем исправить вручную
+    }
+
+    // Если нет протокола — добавляем https://
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+      url = "https://" + url;
+    }
+
+    // Убираем trailing slash
+    url = url.replace(/\/+$/, "");
+
+    return url;
+  };
+
+  const validateGitUrl = (url: string): string | null => {
+    try {
+      const u = new URL(url);
+      if (!["http:", "https:"].includes(u.protocol)) return "URL должен начинаться с https://";
+      if (!u.hostname.includes(".")) return "Некорректный хост: " + u.hostname;
+      const parts = u.pathname.replace(/^\//, "").split("/").filter(Boolean);
+      if (parts.length < 2) return "URL должен содержать владельца и название репозитория: github.com/user/repo";
+      return null;
+    } catch {
+      return "Некорректный URL репозитория";
+    }
+  };
+
   const handleDetect = async () => {
     if (!repoUrl.trim()) return;
+    const normalized = normalizeGitUrl(repoUrl);
+    setRepoUrl(normalized);
+    const validErr = validateGitUrl(normalized);
+    if (validErr) { setDetectError(validErr); return; }
     setDetecting(true); setDetectError(""); setDetectResult(null);
-    const data = await apiGet("git_detect", { repo_url: repoUrl.trim() });
+    const data = await apiGet("git_detect", { repo_url: normalized });
     setDetecting(false);
     if (data.error) { setDetectError(data.error + (data.details ? ': ' + data.details : '')); return; }
     setDetectResult(data);
@@ -211,11 +252,19 @@ export default function DeployFromGit() {
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs text-neutral-400 uppercase tracking-wide">Git URL репозитория</label>
                 <input
-                  value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)}
+                  value={repoUrl} onChange={(e) => { setRepoUrl(e.target.value); setDetectError(""); }}
+                  onPaste={(e) => {
+                    e.preventDefault();
+                    const pasted = e.clipboardData.getData("text");
+                    const normalized = normalizeGitUrl(pasted);
+                    setRepoUrl(normalized);
+                    setDetectError("");
+                  }}
                   placeholder={SOURCES[sourceIdx].placeholder}
                   className="bg-neutral-900 border border-neutral-700 px-4 py-3 text-sm text-white font-mono placeholder:text-neutral-600 focus:outline-none focus:border-blue-400 transition-colors"
                   onKeyDown={(e) => e.key === "Enter" && repoUrl.trim() && handleDetect()}
                 />
+                <p className="text-xs text-neutral-600">Пример: https://github.com/user/repo</p>
               </div>
 
               <div className="flex flex-col gap-1.5">
