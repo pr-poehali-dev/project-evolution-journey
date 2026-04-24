@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { getUser } from "@/lib/auth";
@@ -98,6 +98,7 @@ export default function Project() {
 
   const [deploying, setDeploying] = useState(false);
   const [deployBranch, setDeployBranch] = useState("main");
+  const buildingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [envVars, setEnvVars] = useState<Record<string, string>>({});
   const [newEnvKey, setNewEnvKey] = useState(""); const [newEnvVal, setNewEnvVal] = useState("");
@@ -135,8 +136,37 @@ export default function Project() {
     if (!user || !id) return;
     setLoading(true);
     const data = await apiGet("project", { project_id: id, user_id: String(user.user_id) });
-    if (data.project) { setProject(data.project); setDeployments(data.deployments || []); setDomains(data.domains || []); setEnvVars(data.project.env_vars || {}); }
+    if (data.project) {
+      setProject(data.project);
+      const deps = data.deployments || [];
+      setDeployments(deps);
+      setDomains(data.domains || []);
+      setEnvVars(data.project.env_vars || {});
+      // Если есть building-деплой — поллим
+      const hasBuilding = deps.some((d: Deployment) => d.status === "building" || d.status === "queued");
+      if (hasBuilding) startBuildingPoll();
+      else stopBuildingPoll();
+    }
     setLoading(false);
+  };
+
+  const startBuildingPoll = () => {
+    if (buildingPollRef.current) return;
+    buildingPollRef.current = setInterval(async () => {
+      if (!user || !id) return;
+      const data = await apiGet("project", { project_id: id, user_id: String(user.user_id) });
+      if (data.project) {
+        const deps = data.deployments || [];
+        setDeployments(deps);
+        setProject(data.project);
+        const stillBuilding = deps.some((d: Deployment) => d.status === "building" || d.status === "queued");
+        if (!stillBuilding) stopBuildingPoll();
+      }
+    }, 4000);
+  };
+
+  const stopBuildingPoll = () => {
+    if (buildingPollRef.current) { clearInterval(buildingPollRef.current); buildingPollRef.current = null; }
   };
 
   const loadAnalytics = async () => {
@@ -228,7 +258,7 @@ export default function Project() {
     navigator.clipboard.writeText(webhookUrl).then(() => { setGhCopied(true); setTimeout(() => setGhCopied(false), 2000); });
   };
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); return () => stopBuildingPoll(); }, [id]);
   useEffect(() => { if (tab === "analytics" && analytics.length === 0) loadAnalytics(); }, [tab]);
   useEffect(() => { if (tab === "webhooks") loadWebhooks(); }, [tab]);
   useEffect(() => { if (tab === "usage") loadUsage(); }, [tab]);
@@ -329,6 +359,10 @@ export default function Project() {
           <Link to={`/dashboard/project/${id}/ai`}
             className="flex items-center gap-1.5 px-3 py-1.5 border border-neutral-700 text-neutral-300 text-sm hover:border-blue-400 hover:text-blue-400 transition-colors">
             <span className="text-blue-400">✦</span> AI
+          </Link>
+          <Link to={`/dashboard/deploy-git?repo=${encodeURIComponent(project?.repo_url || '')}`}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-neutral-700 text-neutral-300 text-sm hover:border-blue-400 hover:text-blue-400 transition-colors">
+            <Icon name="GitBranch" size={13} /> Git Deploy
           </Link>
           <input value={deployBranch} onChange={(e) => setDeployBranch(e.target.value)}
             className="bg-neutral-800 border border-neutral-700 px-3 py-1.5 text-xs text-white w-24 focus:outline-none focus:border-blue-400" placeholder="main" />

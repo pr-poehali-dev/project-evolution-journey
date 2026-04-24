@@ -15,6 +15,7 @@ import AIAssistant from "./pages/AIAssistant";
 import UIKit from "./pages/UIKit";
 import CodeEditor from "./pages/CodeEditor";
 import CLIPage from "./pages/CLIPage";
+import DeployFromGit from "./pages/DeployFromGit";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -36,6 +37,7 @@ const App = () => (
           <Route path="/dashboard/ui-kit" element={<UIKit />} />
           <Route path="/dashboard/editor" element={<CodeEditor />} />
           <Route path="/dashboard/cli" element={<CLIPage />} />
+          <Route path="/dashboard/deploy-git" element={<DeployFromGit />} />
           <Route path="/admin" element={<Admin />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />

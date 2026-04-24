@@ -71,13 +71,20 @@ export default function Dashboard() {
           <h1 className="text-2xl font-bold">Проекты</h1>
           <p className="text-neutral-400 text-sm mt-1">Все ваши приложения в одном месте</p>
         </div>
-        <button
-          onClick={() => setShowNew(true)}
-          className="flex items-center gap-2 bg-white text-black px-4 py-2 text-sm uppercase tracking-wide font-medium hover:bg-blue-400 transition-colors"
-        >
-          <Icon name="Plus" size={14} />
-          Новый проект
-        </button>
+        <div className="flex items-center gap-2">
+          <a href="/dashboard/deploy-git"
+            className="flex items-center gap-2 border border-neutral-700 text-neutral-300 px-4 py-2 text-sm font-medium hover:border-blue-400 hover:text-blue-400 transition-colors">
+            <Icon name="GitBranch" size={14} />
+            Deploy from Git
+          </a>
+          <button
+            onClick={() => setShowNew(true)}
+            className="flex items-center gap-2 bg-white text-black px-4 py-2 text-sm uppercase tracking-wide font-medium hover:bg-blue-400 transition-colors"
+          >
+            <Icon name="Plus" size={14} />
+            Новый проект
+          </button>
+        </div>
       </div>
 
       {showNew && (

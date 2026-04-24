@@ -11,6 +11,7 @@ import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
+from git_deploy import git_deploy, git_detect
 
 SCHEMA = 't_p30709305_project_evolution_jo'
 
@@ -1049,6 +1050,14 @@ def handler(event: dict, context) -> dict:
         if action == 'env_envs':        return handle_get_env_envs(params)
         if action == 'integrations':    return handle_get_integrations(params)
         if action == 'github_config':   return handle_get_github_config(params)
+        if action == 'git_detect':
+            repo_url = params.get('repo_url', '').strip()
+            if not repo_url:
+                return resp(400, {'error': 'repo_url обязателен'})
+            result, err = git_detect(repo_url)
+            if err:
+                return resp(400, {'error': 'Не удалось клонировать репо', 'details': err})
+            return resp(200, result)
         # GitHub webhook входящий (без action — по X-GitHub-Event header)
         if (params.get('project_id') and
             (event.get('headers', {}).get('x-github-event') or event.get('headers', {}).get('X-GitHub-Event'))):
@@ -1082,6 +1091,7 @@ def handler(event: dict, context) -> dict:
         'toggle_integration': handle_toggle_integration,
         'setup_github':       handle_setup_github,
         'github_webhook':     lambda b: handle_github_webhook(event),
+        'git_deploy':         lambda b: git_deploy(b, get_conn(), resp),
     }
 
     if action in routes:
